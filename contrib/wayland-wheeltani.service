@@ -1,0 +1,19 @@
+[Unit]
+Description=Progressive middle-button autoscroll daemon for Wayland
+Documentation=https://github.com/lucas/Wayland-Wheeltani
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/wayland-wheeltani --no-interactive --config %h/.config/Wayland-Wheeltani/config.toml
+Restart=on-failure
+RestartSec=2
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.config/Wayland-Wheeltani
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,44 @@
+# Rust build output
+/target/
+**/*.rs.bk
+*.pdb
+
+# Keep Cargo.lock tracked: this repository builds an application/daemon.
+
+# Local runtime/config overrides
+/config.local.toml
+/*.local.toml
+/.env
+/.env.*
+!.env.example
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Editors / IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs and crash dumps
+*.log
+*.pid
+*.pid.lock
+core
+
+# Coverage / profiling artifacts
+/coverage/
+*.profraw
+*.profdata
+flamegraph.svg
+
+# Temporary files
+/tmp/
+/temp/
+*.tmp
+*.bak

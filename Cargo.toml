@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/middle-scroll-core",
+    "crates/middle-scroll-linux",
+]
+
+# On non-Linux hosts (e.g. macOS dev machines) `cargo test` / `cargo check`
+# from the workspace root only build the cross-platform core. The Linux
+# backend can still be built explicitly with:
+#
+#     cargo check -p middle-scroll-linux --target x86_64-unknown-linux-gnu
+#
+# or natively from inside an Ubuntu VM with:
+#
+#     cargo build -p middle-scroll-linux
+default-members = ["crates/middle-scroll-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/lucas/Wayland-Wheeltani"
+description = "Progressive middle-button autoscroll daemon for Wayland (evdev/uinput)."
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "1"
+
+# Linux-only deps (only used by middle-scroll-linux)
+evdev = "0.13"
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ctrlc = { version = "3", features = ["termination"] }
+nix = { version = "0.29", features = ["signal", "poll", "time"] }
+directories = "5"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"

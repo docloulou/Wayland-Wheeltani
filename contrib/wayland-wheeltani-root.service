@@ -1,0 +1,24 @@
+[Unit]
+Description=Progressive middle-button autoscroll daemon for Wayland (root service)
+Documentation=https://github.com/lucas/Wayland-Wheeltani
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/wayland-wheeltani --no-interactive --config /etc/wayland-wheeltani/config.toml
+Restart=on-failure
+RestartSec=2
+
+# The daemon needs the real /dev/input and /dev/uinput nodes, so do NOT enable
+# PrivateDevices=true here.
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

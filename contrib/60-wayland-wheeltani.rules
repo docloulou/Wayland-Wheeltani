@@ -1,0 +1,16 @@
+### EXAMPLE udev rule. Do NOT install blindly. Read SECURITY in README.md first.
+### Replace the vendor/product placeholders with your physical mouse IDs.
+### The rule uses TAG+="uaccess" so the active desktop user can run the daemon
+### without sudo, instead of granting broad access via the input group.
+
+ACTION!="add|change", GOTO="wayland_wheeltani_end"
+
+KERNEL=="uinput", MODE="0600", TAG+="uaccess"
+
+KERNEL=="event[0-9]*", \
+    SUBSYSTEM=="input", \
+    ATTRS{idVendor}=="REPLACE_VENDOR_ID", \
+    ATTRS{idProduct}=="REPLACE_PRODUCT_ID", \
+    MODE="0600", TAG+="uaccess"
+
+LABEL="wayland_wheeltani_end"

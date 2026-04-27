@@ -1,0 +1,108 @@
+# Example configuration for wayland-wheeltani.
+#
+# Copy this to ~/.config/Wayland-Wheeltani/config.toml and adjust to taste.
+# Every field is optional: missing values fall back to the built-in defaults
+# shown below. CLI flags always override config file values.
+
+# Path to the physical mouse evdev node. Generate this interactively with
+# `wayland-wheeltani --setup`, or find candidates with `--list-devices`.
+# device = "/dev/input/event12"
+
+# Whether to grab the physical device exclusively. With grab=true the
+# compositor only sees the synthetic events from the virtual mouse, which is
+# necessary to suppress middle-click and movement during scroll mode.
+grab = true
+
+# Pretend mode: do not create the /dev/uinput virtual mouse and only log
+# what would have been emitted. Useful for development and CI.
+dry_run = false
+
+# Auto-exit after N seconds. Strongly recommended during development so a
+# bug in the daemon cannot leave your mouse permanently grabbed.
+# safety_timeout_seconds = 60
+
+# ---- core engine ----------------------------------------------------------
+
+# Only mode supported in V1.
+mode = "hold_progressive"
+
+# Vertical pixels of slack around the press position before scroll engages.
+# Movements within +/- deadzone_units do nothing (and a release in this band
+# emits a normal middle click).
+deadzone_units = 10
+
+# Vertical distance from the deadzone edge that maps to "max scroll speed".
+# Smaller value = reaches max speed sooner.
+full_speed_units = 120
+
+# Hard cap on |offset_y|. Beyond this, additional motion is ignored so the
+# scroll cannot keep accelerating off-screen.
+max_offset_units = 240
+
+# Scroll velocity envelope, expressed in classic wheel detents per second.
+# 1.5 detent/s feels like a slow, deliberate page glide.
+# 32 detent/s feels close to "fling".
+min_speed_detents_per_second = 1.5
+max_speed_detents_per_second = 32.0
+
+# Curve shape for the speed mapping (1.0 = linear, >1 = soft start, <1 = aggressive).
+# Used only when scroll_speed_steps is empty.
+acceleration_exponent = 1.6
+
+# Scroll speed profile by vertical distance from the middle-button press point.
+# distance_units is an absolute evdev REL_Y distance, not just distance beyond
+# the deadzone. The last reached step controls the speed. Direction is still
+# determined by whether you moved down or up from the original press point.
+#
+# Example: with the defaults below, moving 40 units away scrolls at 4 detents/s;
+# moving 140 units away scrolls at 18 detents/s.
+[[scroll_speed_steps]]
+distance_units = 11
+speed_detents_per_second = 1.5
+
+[[scroll_speed_steps]]
+distance_units = 40
+speed_detents_per_second = 4.0
+
+[[scroll_speed_steps]]
+distance_units = 80
+speed_detents_per_second = 10.0
+
+[[scroll_speed_steps]]
+distance_units = 140
+speed_detents_per_second = 18.0
+
+[[scroll_speed_steps]]
+distance_units = 220
+speed_detents_per_second = 32.0
+
+# Internal scroll emission rate. 120 Hz matches the rate at which most
+# Wayland compositors poll input.
+tick_hz = 120
+
+# Flip vertical scroll direction (i.e. natural / "Mac-style" scrolling).
+invert_vertical = false
+
+# While the middle button is held, suppress raw cursor motion so the pointer
+# does not drift. Recommended.
+suppress_motion_while_pending = true
+suppress_motion_while_scrolling = true
+
+# When a short middle click is detected (release inside the deadzone) and
+# the user moved a tiny amount during the press, replay that motion just
+# before the synthetic click. Off by default for predictability.
+replay_pending_motion_on_click = false
+
+# Emit REL_WHEEL_HI_RES (1 detent = 120 hi-res units) for smooth scrolling
+# in modern apps. Emit REL_WHEEL too for legacy app compatibility. Both ON
+# by default and matches what physical hi-res wheels do.
+emit_hires_wheel = true
+emit_legacy_wheel = true
+
+# Reserved for a future horizontal-scroll mode.
+horizontal_scroll = false
+
+# Safety cap on the number of detents emitted in a single tick. Prevents a
+# pathologically large dt (e.g. system was paused) from generating a giant
+# scroll burst.
+max_detents_per_tick = 4
