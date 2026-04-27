@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
 env:
   BIN_NAME: wayland-wheeltani
   PACKAGE: middle-scroll-linux
@@ -50,7 +54,7 @@ jobs:
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: stable
+          version: latest
 
       - name: Cache cargo registry and target
         uses: actions/cache@v4
