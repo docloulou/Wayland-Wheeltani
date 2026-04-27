@@ -1,0 +1,138 @@
+name: Release Linux binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version/tag, for example v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  BIN_NAME: wayland-wheeltani
+  PACKAGE: middle-scroll-linux
+
+jobs:
+  build:
+    name: Build ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            label: linux-x86_64-gnu
+          - target: aarch64-unknown-linux-gnu
+            label: linux-aarch64-gnu
+
+    steps:
+      - name: Validate version input
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Version must look like v0.1.0, v1.2.3-beta.1, etc." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: stable
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.target }}-cargo-
+
+      - name: Install cargo-zigbuild
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build release binary
+        run: cargo zigbuild --release -p "$PACKAGE" --target "${{ matrix.target }}"
+
+      - name: Package binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          archive="${BIN_NAME}-${version}-${{ matrix.label }}.tar.gz"
+          staging="dist/${BIN_NAME}-${version}-${{ matrix.label }}"
+
+          mkdir -p "$staging"
+          cp "target/${{ matrix.target }}/release/${BIN_NAME}" "$staging/${BIN_NAME}"
+          cp README.md LICENSE-MIT LICENSE-APACHE "$staging/"
+          tar -C dist -czf "dist/${archive}" "${BIN_NAME}-${version}-${{ matrix.label }}"
+          sha256sum "dist/${archive}" > "dist/${archive}.sha256"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.label }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub release
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Validate version input
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Version must look like v0.1.0, v1.2.3-beta.1, etc." >&2
+            exit 1
+          fi
+
+      - name: Create release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${{ inputs.version }}"
+
+          if gh release view "$version" >/dev/null 2>&1; then
+            echo "Release $version already exists; uploading/replacing assets."
+            gh release upload "$version" dist/* --clobber
+          else
+            gh release create "$version" dist/* \
+              --title "Wayland-Wheeltani ${version}" \
+              --target "${{ github.sha }}" \
+              --notes "Linux release binaries for Wayland-Wheeltani ${version}."
+          fi
