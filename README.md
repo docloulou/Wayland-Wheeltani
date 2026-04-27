@@ -116,6 +116,20 @@ Verify on the Linux machine:
 ~/.local/bin/wayland-wheeltani --help
 ```
 
+### GitHub release workflow
+
+The workflow builds and publishes release archives for:
+
+- `x86_64-unknown-linux-gnu`
+- `aarch64-unknown-linux-gnu`
+
+Each `.tar.gz` contains:
+
+- the `wayland-wheeltani` binary;
+- `README.md`;
+- `LICENSE-MIT` and `LICENSE-APACHE`;
+- the full `contrib/` directory with service and udev templates.
+
 ## Quick start on Ubuntu Wayland
 
 During development, start with `sudo` plus a short safety timeout:

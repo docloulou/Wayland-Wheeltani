@@ -86,6 +86,7 @@ jobs:
           mkdir -p "$staging"
           cp "target/${{ matrix.target }}/release/${BIN_NAME}" "$staging/${BIN_NAME}"
           cp README.md LICENSE-MIT LICENSE-APACHE "$staging/"
+          cp -R contrib "$staging/"
           tar -C dist -czf "dist/${archive}" "${BIN_NAME}-${version}-${{ matrix.label }}"
           sha256sum "dist/${archive}" > "dist/${archive}.sha256"
 
