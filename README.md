@@ -74,8 +74,9 @@ instead of your normal user.
 First-time setup for the recommended user service:
 
 ```bash
-sudo "$HOME/.cargo/bin/wayland-wheeltani" --setup --install-udev-rule
-wayland-wheeltani --install-service
+sudo "$HOME/.cargo/bin/wayland-wheeltani" --setup --install-udev-rule  # Set up the tool and install the udev rule
+sudo udevadm control --reload-rules   # Reload udev rules so the new one is recognized
+wayland-wheeltani --install-service  # Install the user-level systemd service
 ```
 
 The first command runs with `sudo` because it writes
@@ -106,6 +107,7 @@ Then run the same setup flow:
 
 ```bash
 sudo ~/.local/bin/wayland-wheeltani --setup --install-udev-rule
+sudo udevadm control --reload-rules   # Reload udev rules so the new one is recognized
 ~/.local/bin/wayland-wheeltani --install-service
 ```
 
@@ -233,6 +235,7 @@ Then run:
 
 ```bash
 sudo ~/.local/bin/wayland-wheeltani --setup --install-udev-rule
+sudo udevadm control --reload-rules   # Reload udev rules so the new one is recognized
 ~/.local/bin/wayland-wheeltani --install-service
 ```
 
@@ -354,6 +357,7 @@ Cargo binary path for udev commands:
 
 ```bash
 sudo "$HOME/.cargo/bin/wayland-wheeltani" --setup --install-udev-rule
+sudo udevadm control --reload-rules   # Reload udev rules so the new one is recognized
 sudo "$HOME/.cargo/bin/wayland-wheeltani" --remove-udev-rule
 ```
 
@@ -379,6 +383,7 @@ Install/remove udev rules with `sudo`:
 
 ```bash
 sudo "$HOME/.cargo/bin/wayland-wheeltani" --setup --install-udev-rule
+sudo udevadm control --reload-rules   # Reload udev rules so the new one is recognized
 sudo "$HOME/.cargo/bin/wayland-wheeltani" --remove-udev-rule
 ```
 
