@@ -79,5 +79,8 @@ the engine fall back to `min_speed_detents_per_second`,
 
 The daemon accepts CLI overrides and a TOML config file. `--setup` enumerates
 candidate mice, selects one interactively when needed, and saves the device path
-to the config file. Services should run with `--no-interactive` so they fail
-instead of blocking on prompts.
+to the config file. `--install-udev-rule` installs a root-owned udev rule for the
+selected mouse and `/dev/uinput`; `--remove-udev-rule` removes it.
+`--install-service` installs and starts a systemd user service using the saved
+config; `--remove-service` stops, disables, and removes it. Services should run
+with `--no-interactive` so they fail instead of blocking on prompts.

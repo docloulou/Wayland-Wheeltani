@@ -9,158 +9,96 @@ like a normal middle click.
 
 ```text
 hold middle button
-  ├─ tiny movement inside deadzone       → normal middle click on release
-  ├─ move down from press position       → continuous scroll down
-  ├─ move right from press position      → continuous horizontal scroll right
-  ├─ move farther from press position    → faster scroll
-  ├─ return near press position          → scroll slows/stops
-  └─ cross the press position            → scroll reverses on that axis
+  ├─ tiny movement inside deadzone       -> normal middle click on release
+  ├─ move down from press position       -> continuous scroll down
+  ├─ move right from press position      -> continuous horizontal scroll right
+  ├─ move farther from press position    -> faster scroll
+  ├─ return near press position          -> scroll slows/stops
+  └─ cross the press position            -> scroll reverses on that axis
 ```
 
 No GUI, no overlay, no network, no keyboard capture. The project is split into a
 portable, unit-tested Rust core and a Linux backend using `evdev` + `uinput`.
 
-## Status
+## User Installation
 
-- Core engine: implemented and unit-tested.
-- Linux backend: implemented for Wayland compositors through `/dev/input` and
-  `/dev/uinput`.
-- macOS: supported as a development/build host only. The daemon itself runs on
-  Linux because it needs evdev/uinput.
-- End-to-end UX still needs real validation on an Ubuntu Wayland session with a
-  physical mouse.
+### Requirements
 
-## Workspace layout
+- Linux Wayland desktop session.
+- A physical mouse exposed through `/dev/input/eventX`.
+- `/dev/uinput` available (`sudo modprobe uinput` if missing).
+- `systemd --user` for the recommended service installation.
 
-```text
-crates/
-├── middle-scroll-core/      # platform-independent state machine + tests
-└── middle-scroll-linux/     # Linux daemon, CLI, config, evdev/uinput backend
-contrib/
-├── 60-wayland-wheeltani.rules
-├── wayland-wheeltani.service
-└── wayland-wheeltani-root.service
-examples/
-└── config.toml
-```
+For daily use without running the daemon as root, install a targeted udev rule
+for your mouse and `/dev/uinput`. Wayland-Wheeltani can generate that rule for
+USB mice with `ID_VENDOR_ID` and `ID_MODEL_ID` udev properties.
 
-## Build
-
-### Linux native build
-
-Use this when building directly on the target Linux machine.
+### Option A: install with Cargo
 
 ```bash
-sudo apt update
-sudo apt install -y build-essential pkg-config
-cargo build --release -p middle-scroll-linux
+cargo install wayland-wheeltani
 ```
 
-Binary output:
+`cargo install` only installs the binary. It does not run setup prompts, install
+udev rules, or create systemd services automatically.
 
-```text
-target/release/wayland-wheeltani
-```
-
-### macOS development checks
-
-The core can be tested natively on macOS:
+First-time setup for the recommended user service:
 
 ```bash
-cargo test -p middle-scroll-core
-cargo clippy -p middle-scroll-core --all-targets -- -D warnings
+sudo wayland-wheeltani --setup --install-udev-rule
+wayland-wheeltani --install-service
 ```
 
-### Cross-compile Linux ARM64 from macOS Apple Silicon
+The first command runs with `sudo` because it writes
+`/etc/udev/rules.d/60-wayland-wheeltani.rules`. It still saves the config for the
+original `SUDO_USER`. The second command must run without `sudo`; it installs and
+starts the `systemd --user` service.
 
-This is the recommended macOS -> Linux build path. Plain `cargo build --target`
-fails at the linker step on macOS because Apple `ld` cannot link Linux ELF
-binaries. `cargo-zigbuild` uses Zig as the Linux cross-linker.
+### Option B: install from a release archive
+
+Download the archive matching your Linux architecture from the GitHub release:
+
+- `wayland-wheeltani-vX.Y.Z-linux-x86_64-gnu.tar.gz`
+- `wayland-wheeltani-vX.Y.Z-linux-aarch64-gnu.tar.gz`
+
+Install the binary:
 
 ```bash
-brew install zig
-cargo install cargo-zigbuild
-rustup target add aarch64-unknown-linux-gnu
-cargo zigbuild --release -p middle-scroll-linux --target aarch64-unknown-linux-gnu
+tar -xzf wayland-wheeltani-vX.Y.Z-linux-x86_64-gnu.tar.gz
+install -Dm755 wayland-wheeltani-vX.Y.Z-linux-x86_64-gnu/wayland-wheeltani \
+  ~/.local/bin/wayland-wheeltani
 ```
 
-Binary output:
-
-```text
-target/aarch64-unknown-linux-gnu/release/wayland-wheeltani
-```
-
-### Cross-compile Linux x86_64 from macOS
+Then run the same setup flow:
 
 ```bash
-brew install zig
-cargo install cargo-zigbuild
-rustup target add x86_64-unknown-linux-gnu
-cargo zigbuild --release -p middle-scroll-linux --target x86_64-unknown-linux-gnu
+sudo ~/.local/bin/wayland-wheeltani --setup --install-udev-rule
+~/.local/bin/wayland-wheeltani --install-service
 ```
 
-Binary output:
-
-```text
-target/x86_64-unknown-linux-gnu/release/wayland-wheeltani
-```
-
-### Copy a cross-built binary to Linux
+### Manage the user service
 
 ```bash
-scp target/aarch64-unknown-linux-gnu/release/wayland-wheeltani user@linux-box:~/.local/bin/
-ssh user@linux-box 'chmod +x ~/.local/bin/wayland-wheeltani'
+wayland-wheeltani --start
+wayland-wheeltani --stop
+wayland-wheeltani --restart
+journalctl --user -u wayland-wheeltani -f
 ```
 
-Verify on the Linux machine:
+Remove the user service and udev rule:
 
 ```bash
-~/.local/bin/wayland-wheeltani --help
+wayland-wheeltani --remove-service
+sudo wayland-wheeltani --remove-udev-rule
 ```
 
-### GitHub release workflow
-
-The workflow builds and publishes release archives for:
-
-- `x86_64-unknown-linux-gnu`
-- `aarch64-unknown-linux-gnu`
-
-Each `.tar.gz` contains:
-
-- the `wayland-wheeltani` binary;
-- `README.md`;
-- `LICENSE-MIT` and `LICENSE-APACHE`;
-- the full `contrib/` directory with service and udev templates.
-
-## Quick start on Ubuntu Wayland
-
-During development, start with `sudo` plus a short safety timeout:
+If installed with Cargo, remove the binary with:
 
 ```bash
-sudo ./target/release/wayland-wheeltani --list-devices
-sudo ./target/release/wayland-wheeltani --setup
-sudo ./target/release/wayland-wheeltani --dry-run --verbose --safety-timeout-seconds 60
-sudo ./target/release/wayland-wheeltani --safety-timeout-seconds 120
+cargo uninstall wayland-wheeltani
 ```
 
-`--setup` lists candidate mice, lets you choose one, and saves it to the config
-file. If the command is run through `sudo`, the default config path is resolved
-for the original `SUDO_USER` and the file ownership is restored to that user.
-
-Default config path:
-
-```text
-~/.config/Wayland-Wheeltani/config.toml
-```
-
-Override config path:
-
-```bash
-wayland-wheeltani --config ./my-config.toml --setup
-wayland-wheeltani --config ./my-config.toml --no-interactive
-```
-
-## CLI reference
+### CLI reference
 
 ```text
 wayland-wheeltani [OPTIONS]
@@ -168,13 +106,26 @@ wayland-wheeltani [OPTIONS]
 Options:
   --device <PATH>                 evdev node, e.g. /dev/input/event12
   --config <FILE>                 override config path
-  --setup                         choose a mouse interactively, save config, exit
+  --setup                         choose a mouse interactively and save config
+  --install-udev-rule             install udev access rule for selected mouse and /dev/uinput
+  --remove-udev-rule              remove the installed Wayland-Wheeltani udev rule
+  --install-service               install, enable, and start the systemd user service
+  --remove-service                stop, disable, and remove the systemd user service
+  --start                         start the installed systemd user service
+  --stop                          stop the installed systemd user service
+  --restart                       restart the installed systemd user service
   --list-devices                  list candidate mice and exit
   --no-grab                       do not grab the physical mouse exclusively
   --dry-run                       do not create /dev/uinput; log actions only
   --no-interactive                never prompt; fail if no device is configured
   --safety-timeout-seconds <N>    auto-exit after N seconds
   -v, --verbose                   -v: debug logs, -vv: trace logs
+```
+
+Default config path:
+
+```text
+~/.config/Wayland-Wheeltani/config.toml
 ```
 
 Precedence is:
@@ -185,11 +136,11 @@ CLI flags > config file > built-in defaults
 
 See [`examples/config.toml`](examples/config.toml) for every tunable option.
 
-### Scroll speed steps
+### Useful config options
 
-Scroll speed is configurable by distance from the original middle-button press
-point. The same steps apply to vertical and horizontal autoscroll. The config
-uses ordered `[[scroll_speed_steps]]` entries:
+Scroll speed is configured by distance from the original middle-button press
+point. The same `[[scroll_speed_steps]]` apply to vertical and horizontal
+autoscroll:
 
 ```toml
 [[scroll_speed_steps]]
@@ -201,217 +152,126 @@ distance_units = 80
 speed_detents_per_second = 10.0
 ```
 
-The last reached distance step wins. So if the pointer is 90 units away from the
+The last reached distance step wins. If the pointer is 90 units away from the
 press point on either axis, the example above scrolls at `10.0` detents/s.
-Direction is based on which side of the original press point the pointer is on.
 
-Set `scroll_speed_steps = []` to disable stepped mode and use the continuous
-fallback curve controlled by `min_speed_detents_per_second`,
-`max_speed_detents_per_second`, `full_speed_units`, and
-`acceleration_exponent`.
+Other common options:
 
-`horizontal_scroll = true` by default. Set it to `false` to restrict autoscroll
-to the vertical axis only.
+```toml
+horizontal_scroll = true
+invert_vertical = false
+invert_horizontal = false
+deadzone_units = 10
+min_hires_units_per_event = 15
+```
 
 `min_hires_units_per_event` controls how many hi-res wheel units are accumulated
 before one hi-res event is emitted. The default `15` gives 8 smooth samples per
 detent (`120` units) and reduces tiny synthetic event spam in apps that stutter
 under high-rate scrolling.
 
-## Does it need sudo?
+## Installation From Source
 
-For initial testing: **sudo is the simplest path** because the daemon needs to:
-
-1. read the physical mouse from `/dev/input/eventX`, and
-2. create a virtual mouse through `/dev/uinput`.
-
-For normal daily use: **sudo is not required** if you install a targeted udev
-rule that grants the active desktop user access to exactly the mouse and uinput
-device.
-
-Recommended approach:
-
-- use `TAG+="uaccess"` in udev rules;
-- match a specific USB vendor/product ID for the physical mouse;
-- avoid adding your user to the broad `input` group, because that grants access
-  to keyboards too.
-
-Find your mouse IDs:
+### Native Linux build
 
 ```bash
-lsusb
-udevadm info -a -n /dev/input/event12 | less
+sudo apt update
+sudo apt install -y build-essential pkg-config
+cargo build --release -p wayland-wheeltani
 ```
 
-Install a device-specific rule:
+Binary output:
+
+```text
+target/release/wayland-wheeltani
+```
+
+Install the locally built binary:
 
 ```bash
-sudo install -Dm644 contrib/60-wayland-wheeltani.rules /etc/udev/rules.d/60-wayland-wheeltani.rules
-sudoedit /etc/udev/rules.d/60-wayland-wheeltani.rules
-# Replace REPLACE_VENDOR_ID and REPLACE_PRODUCT_ID.
-
-sudo udevadm control --reload-rules
-sudo udevadm trigger
+install -Dm755 target/release/wayland-wheeltani ~/.local/bin/wayland-wheeltani
 ```
 
-Verify access:
+Then run:
 
 ```bash
-udevadm info -q property -n /dev/input/event12 | grep TAGS
-getfacl /dev/input/event12
-getfacl /dev/uinput
+sudo ~/.local/bin/wayland-wheeltani --setup --install-udev-rule
+~/.local/bin/wayland-wheeltani --install-service
 ```
 
-After that, run as your normal user:
+### Install directly from the checked-out source tree
 
 ```bash
-~/.local/bin/wayland-wheeltani --setup
-~/.local/bin/wayland-wheeltani --no-interactive
+cargo install --path crates/middle-scroll-linux
 ```
 
-The systemd unit provided in `contrib/` is a **user service**. It does **not**
-run with `sudo` automatically. It only works without sudo after the udev rule
-has granted your normal desktop user access to the selected `/dev/input/eventX`
-node and to `/dev/uinput`.
+### Cross-compile from macOS
 
-## systemd services
-
-There are two supported service styles:
-
-| Mode | Runs as | Needs udev rule? | Install command | Recommended use |
-|---|---|---:|---|---|
-| **User service** | your desktop user | yes | `systemctl --user ...` | daily use, least privilege |
-| **Root service** | root | no | `sudo systemctl ...` | simpler setup, more privileged |
-
-Use **one** of the two service modes, not both at the same time.
-
-### Option A: systemd user daemon (recommended)
-
-This mode does not run with sudo. Install the udev rule first so your normal
-desktop user can open `/dev/input/eventX` and `/dev/uinput`.
-
-Install the binary and config:
+The daemon runs on Linux only, but it can be cross-compiled from macOS with Zig:
 
 ```bash
-mkdir -p ~/.local/bin ~/.config/Wayland-Wheeltani ~/.config/systemd/user
-cp target/release/wayland-wheeltani ~/.local/bin/
-cp examples/config.toml ~/.config/Wayland-Wheeltani/config.toml
+brew install zig
+cargo install cargo-zigbuild
+rustup target add aarch64-unknown-linux-gnu
+cargo zigbuild --release -p wayland-wheeltani --target aarch64-unknown-linux-gnu
 ```
 
-Run setup once interactively:
+For x86_64 Linux:
 
 ```bash
-~/.local/bin/wayland-wheeltani --setup
+rustup target add x86_64-unknown-linux-gnu
+cargo zigbuild --release -p wayland-wheeltani --target x86_64-unknown-linux-gnu
 ```
 
-Install and start the user service:
+## Development
+
+### Workspace layout
+
+```text
+crates/
+├── middle-scroll-core/      # platform-independent state machine + tests
+└── middle-scroll-linux/     # wayland-wheeltani CLI, config, evdev/uinput backend
+contrib/
+├── 60-wayland-wheeltani.rules
+├── wayland-wheeltani.service
+└── wayland-wheeltani-root.service
+examples/
+└── config.toml
+```
+
+### Verification
 
 ```bash
-cp contrib/wayland-wheeltani.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now wayland-wheeltani.service
-journalctl --user -u wayland-wheeltani -f
+cargo fmt --check
+cargo test -p middle-scroll-core
+cargo test -p wayland-wheeltani
+cargo clippy -p middle-scroll-core --all-targets -- -D warnings
+cargo clippy -p wayland-wheeltani --all-targets -- -D warnings
+cargo build --release -p wayland-wheeltani
 ```
 
-The service uses `--no-interactive`, so it will fail loudly instead of blocking
-on a prompt if the device is not configured. Do not start this unit with
-`sudo systemctl`; use `systemctl --user` as the desktop user.
+On non-Linux hosts, workspace-default checks build only the portable core. Build
+the Linux backend explicitly from Linux or with a Linux target.
 
-### Option B: systemd root daemon (sudo/system service)
-
-This mode runs the daemon as root through the system service manager. It does
-not need the udev `uaccess` rule because root can open `/dev/input/eventX` and
-`/dev/uinput` directly. It is easier to install, but it is more privileged than
-the user service.
-
-Install the binary globally:
-
-```bash
-sudo install -Dm755 target/release/wayland-wheeltani /usr/local/bin/wayland-wheeltani
-```
-
-Create the root-owned config directory:
-
-```bash
-sudo install -d -m 0755 /etc/wayland-wheeltani
-```
-
-Run setup once with sudo and an explicit system config path:
-
-```bash
-sudo /usr/local/bin/wayland-wheeltani \
-  --setup \
-  --config /etc/wayland-wheeltani/config.toml
-```
-
-Install and start the root service:
-
-```bash
-sudo install -Dm644 contrib/wayland-wheeltani-root.service \
-  /etc/systemd/system/wayland-wheeltani.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now wayland-wheeltani.service
-sudo journalctl -u wayland-wheeltani -f
-```
-
-Stop/remove the root service:
-
-```bash
-sudo systemctl disable --now wayland-wheeltani.service
-sudo rm -f /etc/systemd/system/wayland-wheeltani.service
-sudo systemctl daemon-reload
-```
-
-If `/dev/uinput` does not exist yet:
-
-```bash
-sudo modprobe uinput
-```
-
-## Tray icon / top bar indicator
-
-The current daemon is headless on purpose. It can run as a `systemd --user`
-service without any GUI.
-
-Showing an icon next to the clock on Ubuntu GNOME/Wayland is possible, but it
-requires an AppIndicator/KStatusNotifier implementation plus GNOME’s
-AppIndicator extension. GNOME Shell does not provide a native always-available
-legacy tray for arbitrary daemons.
-
-Practical plan for a future version:
-
-1. keep `wayland-wheeltani` as the privileged/headless input daemon;
-2. add a separate unprivileged `wayland-wheeltani-tray` helper;
-3. have the helper expose AppIndicator/KStatusNotifier actions such as Start,
-   Stop, Setup, Open Config, and Quit;
-4. document the Ubuntu dependency:
-
-```bash
-sudo apt install gnome-shell-extension-appindicator libappindicator3-dev
-gnome-extensions enable appindicatorsupport@rgcjonas.gmail.com
-```
-
-This keeps input handling, permissions, and UI dependencies separate.
-
-## How it works
+### How it works
 
 ```text
 /dev/input/eventX
-      │
-      ▼
-middle-scroll-linux
+      |
+      v
+wayland-wheeltani
   ├─ reads physical mouse events through evdev
   ├─ optionally grabs the physical device
   ├─ routes events into middle-scroll-core
   └─ emits synthetic mouse/wheel events through /dev/uinput
-      │
-      ▼
+      |
+      v
 Wayland compositor sees "Wayland-Wheeltani virtual mouse"
 ```
 
 The virtual device emits standard mouse buttons, relative pointer motion,
-legacy wheel detents, and hi-res wheel units (`REL_WHEEL_HI_RES`, 120 units per
-detent). Legacy and hi-res wheel events are batched together for smoother app
+vertical and horizontal legacy wheel detents, and vertical and horizontal hi-res
+wheel units. Legacy and hi-res wheel events are batched together for app
 compatibility.
 
 ## Troubleshooting
@@ -424,10 +284,40 @@ Run setup:
 wayland-wheeltani --setup
 ```
 
-For services/CI, use:
+For services or CI, pass a device explicitly:
 
 ```bash
 wayland-wheeltani --no-interactive --device /dev/input/event12
+```
+
+### `udev rule installation requires root`
+
+Install/remove udev rules with `sudo`:
+
+```bash
+sudo wayland-wheeltani --setup --install-udev-rule
+sudo wayland-wheeltani --remove-udev-rule
+```
+
+Do not run `--install-service`, `--remove-service`, `--start`, `--stop`, or
+`--restart` with `sudo`; those manage your normal user's `systemd --user`
+service.
+
+### `failed to find ID_VENDOR_ID and ID_MODEL_ID`
+
+Automatic udev rule generation needs USB-style udev properties. Check the device:
+
+```bash
+udevadm info -q property -n /dev/input/event12
+```
+
+If the IDs are missing, install the template manually and replace the placeholders:
+
+```bash
+sudo install -Dm644 contrib/60-wayland-wheeltani.rules /etc/udev/rules.d/60-wayland-wheeltani.rules
+sudoedit /etc/udev/rules.d/60-wayland-wheeltani.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger
 ```
 
 ### `failed to create /dev/uinput virtual mouse`
@@ -442,7 +332,7 @@ getfacl /dev/uinput
 
 ### `failed to grab device ... EBUSY`
 
-Another program has an exclusive grab. Stop the previous daemon instance or any
+Another program has an exclusive grab. Stop any previous daemon instance or any
 `evtest -g`/debugging process.
 
 ### The cursor still moves while scrolling
@@ -453,35 +343,19 @@ You are probably running with `--no-grab`. Re-enable grabbing for normal use.
 
 Increase `deadzone_units` in the config.
 
-## Security notes
+### Security notes
 
-`/dev/input/event*` is sensitive. Some devices expose keyboard input through
-the same kernel interface. Wayland-Wheeltani filters mouse-like devices and
-ignores keyboard events, but Linux permissions still matter.
+`/dev/input/event*` is sensitive. Some devices expose keyboard input through the
+same kernel interface. Wayland-Wheeltani filters mouse-like devices and ignores
+keyboard events, but Linux permissions still matter.
 
-Recommended security posture:
+Recommended posture:
 
 - do not run the daemon as root for daily use;
-- do not add your user to the `input` group;
+- do not add your user to the broad `input` group;
 - install a udev rule that matches only your physical mouse;
 - use a `systemd --user` service, not a system service;
-- keep `--setup` interactive and keep services on `--no-interactive`.
-
-## Development verification
-
-```bash
-cargo fmt --check
-cargo test -p middle-scroll-core
-cargo clippy -p middle-scroll-core --all-targets -- -D warnings
-cargo clippy -p middle-scroll-linux --target aarch64-unknown-linux-gnu -- -D warnings
-cargo clippy -p middle-scroll-linux --target x86_64-unknown-linux-gnu -- -D warnings
-```
-
-Build a Linux ARM64 release from macOS:
-
-```bash
-cargo zigbuild --release -p middle-scroll-linux --target aarch64-unknown-linux-gnu
-```
+- keep services on `--no-interactive`.
 
 ## License
 
