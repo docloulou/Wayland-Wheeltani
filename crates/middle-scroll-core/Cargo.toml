@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Cross-platform core: state machine + progressive scroll engine for Wayland-Wheeltani."
+readme = "../../README.md"
 
 [lints.rust]
 unsafe_code = "forbid"

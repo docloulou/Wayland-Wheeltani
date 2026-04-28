@@ -6,6 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Installable Wayland-Wheeltani CLI daemon for Linux/Wayland (evdev + uinput)."
+readme = "../../README.md"
 
 [[bin]]
 name = "wayland-wheeltani"
