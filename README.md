@@ -74,7 +74,7 @@ instead of your normal user.
 First-time setup for the recommended user service:
 
 ```bash
-sudo wayland-wheeltani --setup --install-udev-rule
+sudo "$HOME/.cargo/bin/wayland-wheeltani" --setup --install-udev-rule
 wayland-wheeltani --install-service
 ```
 
@@ -82,6 +82,10 @@ The first command runs with `sudo` because it writes
 `/etc/udev/rules.d/60-wayland-wheeltani.rules`. It still saves the config for the
 original `SUDO_USER`. The second command must run without `sudo`; it installs and
 starts the `systemd --user` service.
+
+The explicit `"$HOME/.cargo/bin/wayland-wheeltani"` path avoids the common error
+`sudo: wayland-wheeltani: command not found`. Many systems reset `PATH` under
+`sudo`, so root cannot find binaries installed by `cargo install` for your user.
 
 ### Option B: install from a release archive
 
@@ -118,8 +122,12 @@ Remove the user service and udev rule:
 
 ```bash
 wayland-wheeltani --remove-service
-sudo wayland-wheeltani --remove-udev-rule
+sudo "$(command -v wayland-wheeltani)" --remove-udev-rule
 ```
+
+If `sudo "$(command -v wayland-wheeltani)" ...` cannot resolve the binary, use
+the absolute install path instead: `"$HOME/.cargo/bin/wayland-wheeltani"` for
+Cargo installs or `"$HOME/.local/bin/wayland-wheeltani"` for release archives.
 
 If installed with Cargo, remove the binary with:
 
@@ -341,6 +349,16 @@ export PATH="$HOME/.cargo/bin:$PATH"
 Avoid `sudo cargo install wayland-wheeltani`; it installs into root's Cargo
 directory, not yours.
 
+If the command works as your user but fails only with `sudo`, use the absolute
+Cargo binary path for udev commands:
+
+```bash
+sudo "$HOME/.cargo/bin/wayland-wheeltani" --setup --install-udev-rule
+sudo "$HOME/.cargo/bin/wayland-wheeltani" --remove-udev-rule
+```
+
+This is expected on systems where `sudo` resets `PATH`.
+
 ### `device not specified`
 
 Run setup:
@@ -360,8 +378,8 @@ wayland-wheeltani --no-interactive --device /dev/input/event12
 Install/remove udev rules with `sudo`:
 
 ```bash
-sudo wayland-wheeltani --setup --install-udev-rule
-sudo wayland-wheeltani --remove-udev-rule
+sudo "$HOME/.cargo/bin/wayland-wheeltani" --setup --install-udev-rule
+sudo "$HOME/.cargo/bin/wayland-wheeltani" --remove-udev-rule
 ```
 
 Do not run `--install-service`, `--remove-service`, `--start`, `--stop`, or
