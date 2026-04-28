@@ -318,29 +318,11 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "middle-scroll-core"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "approx",
  "serde",
  "thiserror",
-]
-
-[[package]]
-name = "middle-scroll-linux"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "ctrlc",
- "directories",
- "evdev",
- "middle-scroll-core",
- "nix 0.29.0",
- "serde",
- "thiserror",
- "toml",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -707,6 +689,24 @@ name = "wasi"
 version = "0.11.1+wasi-snapshot-preview1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
+
+[[package]]
+name = "wayland-wheeltani"
+version = "1.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "ctrlc",
+ "directories",
+ "evdev",
+ "middle-scroll-core",
+ "nix 0.29.0",
+ "serde",
+ "thiserror",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "windows-link"

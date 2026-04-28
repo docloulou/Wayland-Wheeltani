@@ -1,11 +1,11 @@
 [package]
-name = "middle-scroll-linux"
+name = "wayland-wheeltani"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Linux/Wayland backend daemon for middle-scroll-core (evdev + uinput)."
+description = "Installable Wayland-Wheeltani CLI daemon for Linux/Wayland (evdev + uinput)."
 
 [[bin]]
 name = "wayland-wheeltani"
@@ -29,7 +29,7 @@ cast_possible_wrap = "allow"
 similar_names = "allow"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-middle-scroll-core = { path = "../middle-scroll-core" }
+middle-scroll-core = { version = "1.1.0", path = "../middle-scroll-core" }
 evdev = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }

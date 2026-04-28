@@ -22,6 +22,10 @@ mod indicator;
 #[cfg(target_os = "linux")]
 mod physical_mouse;
 #[cfg(target_os = "linux")]
+mod service;
+#[cfg(target_os = "linux")]
+mod udev_rule;
+#[cfg(target_os = "linux")]
 mod virtual_mouse;
 
 #[cfg(target_os = "linux")]
@@ -50,6 +54,8 @@ mod linux {
     use crate::event_router::{self, RoutedEvent};
     use crate::indicator::{Indicator, NoopIndicator};
     use crate::physical_mouse::PhysicalMouse;
+    use crate::service;
+    use crate::udev_rule;
     use crate::virtual_mouse::VirtualMouse;
 
     const COMPOSITOR_SETTLE_DELAY: Duration = Duration::from_millis(200);
@@ -58,28 +64,60 @@ mod linux {
         let args = Args::parsed();
         init_tracing(&args);
 
+        if let Some(action) = service::requested_action(&args) {
+            service::run_action(action)?;
+            return Ok(());
+        }
+
+        if args.remove_udev_rule {
+            udev_rule::remove_rule()?;
+            return Ok(());
+        }
+
         if args.list_devices {
             let devices = device_discovery::enumerate_mice();
             device_discovery::print_listing(io::stdout().lock(), &devices)?;
             return Ok(());
         }
 
+        if args.install_udev_rule {
+            udev_rule::ensure_root()?;
+        }
+
         let resolved = config_loader::resolve(&args)?;
-        let device_path = if args.setup || resolved.device.is_none() {
-            let selected = select_device(&args)?;
+        let should_save_device = args.setup
+            || resolved.device.is_none()
+            || (args.install_service && args.device.is_some())
+            || (args.install_udev_rule && args.device.is_some());
+        let device_path = if should_save_device {
+            let selected = if let Some(device) = args.device.clone() {
+                device
+            } else {
+                select_device(&args)?
+            };
             let config_path = config_loader::save_device_to_config(&selected, &args)?;
             println!(
                 "Saved device {} to {}",
                 selected.display(),
                 config_path.display()
             );
-            if args.setup {
+            if args.setup && !args.install_service && !args.install_udev_rule {
                 return Ok(());
             }
             selected
         } else {
             resolved.device.clone().ok_or(DaemonError::NoDevice)?
         };
+
+        if args.install_udev_rule {
+            udev_rule::install_for_device(&device_path)?;
+            return Ok(());
+        }
+
+        if args.install_service {
+            service::install_user_service(&args)?;
+            return Ok(());
+        }
 
         run_daemon(&device_path, &resolved)
     }

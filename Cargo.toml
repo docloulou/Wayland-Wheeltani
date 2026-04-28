@@ -9,15 +9,15 @@ members = [
 # from the workspace root only build the cross-platform core. The Linux
 # backend can still be built explicitly with:
 #
-#     cargo check -p middle-scroll-linux --target x86_64-unknown-linux-gnu
+#     cargo check -p wayland-wheeltani --target x86_64-unknown-linux-gnu
 #
 # or natively from inside an Ubuntu VM with:
 #
-#     cargo build -p middle-scroll-linux
+#     cargo build -p wayland-wheeltani
 default-members = ["crates/middle-scroll-core"]
 
 [workspace.package]
-version = "0.1.0"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.74"
 license = "MIT OR Apache-2.0"
@@ -28,7 +28,7 @@ description = "Progressive middle-button autoscroll daemon for Wayland (evdev/ui
 serde = { version = "1", features = ["derive"] }
 thiserror = "1"
 
-# Linux-only deps (only used by middle-scroll-linux)
+# Linux-only deps (only used by wayland-wheeltani)
 evdev = "0.13"
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
