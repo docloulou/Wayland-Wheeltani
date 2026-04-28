@@ -17,7 +17,7 @@ members = [
 default-members = ["crates/middle-scroll-core"]
 
 [workspace.package]
-version = "1.1.0"
+version = "1.1.1"
 edition = "2021"
 rust-version = "1.74"
 license = "MIT OR Apache-2.0"
