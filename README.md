@@ -42,6 +42,35 @@ cargo install wayland-wheeltani
 `cargo install` only installs the binary. It does not run setup prompts, install
 udev rules, or create systemd services automatically.
 
+If `wayland-wheeltani` is not found after install, make sure Cargo's bin
+directory is loaded in your shell. Try Cargo's env file first:
+
+```bash
+. "$HOME/.cargo/env"
+wayland-wheeltani --version
+```
+
+If that file does not exist or the command is still not found, add Cargo's bin
+directory to `PATH` directly:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+hash -r
+wayland-wheeltani --version
+```
+
+For a permanent setup, add one of these lines to your shell config, for example
+`~/.bashrc` for Bash or `~/.zshrc` for Zsh:
+
+```bash
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+# or, if ~/.cargo/env is missing or does not work:
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+Do not install with `sudo cargo install`; that installs the binary for `root`
+instead of your normal user.
+
 First-time setup for the recommended user service:
 
 ```bash
@@ -275,6 +304,42 @@ wheel units. Legacy and hi-res wheel events are batched together for app
 compatibility.
 
 ## Troubleshooting
+
+### `wayland-wheeltani: command not found`
+
+Check that Cargo installed the binary:
+
+```bash
+ls -l ~/.cargo/bin/wayland-wheeltani
+~/.cargo/bin/wayland-wheeltani --version
+```
+
+Then load Cargo's environment file:
+
+```bash
+. "$HOME/.cargo/env"
+wayland-wheeltani --version
+```
+
+If `~/.cargo/env` is missing or does not update `PATH`, export the path directly:
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"
+hash -r
+wayland-wheeltani --version
+```
+
+For a permanent fix, add one of these lines to `~/.bashrc`, `~/.zshrc`, or your
+shell's equivalent startup file:
+
+```bash
+[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
+# or:
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+Avoid `sudo cargo install wayland-wheeltani`; it installs into root's Cargo
+directory, not yours.
 
 ### `device not specified`
 
