@@ -138,7 +138,7 @@ fn render_user_service(exe: &Path, config_path: &Path) -> anyhow::Result<String>
     Ok(format!(
         "[Unit]\n\
 Description=Progressive middle-button autoscroll daemon for Wayland\n\
-Documentation=https://github.com/lucas/Wayland-Wheeltani\n\
+Documentation=https://github.com/docloulou/Wayland-Wheeltani\n\
 After=graphical-session.target\n\
 PartOf=graphical-session.target\n\
 \n\

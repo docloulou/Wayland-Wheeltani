@@ -1,6 +1,6 @@
 [Unit]
 Description=Progressive middle-button autoscroll daemon for Wayland (root service)
-Documentation=https://github.com/lucas/Wayland-Wheeltani
+Documentation=https://github.com/docloulou/Wayland-Wheeltani
 After=multi-user.target
 
 [Service]
