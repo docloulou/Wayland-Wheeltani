@@ -83,6 +83,9 @@ tick_hz = 120
 # Flip vertical scroll direction (i.e. natural / "Mac-style" scrolling).
 invert_vertical = false
 
+# Flip horizontal scroll direction. Only applies when horizontal_scroll = true.
+invert_horizontal = false
+
 # While the middle button is held, suppress raw cursor motion so the pointer
 # does not drift. Recommended.
 suppress_motion_while_pending = true
@@ -99,8 +102,12 @@ replay_pending_motion_on_click = false
 emit_hires_wheel = true
 emit_legacy_wheel = true
 
-# Reserved for a future horizontal-scroll mode.
-horizontal_scroll = false
+# Enable horizontal scroll. When true (default), horizontal pointer motion
+# (REL_X) past the deadzone enters scroll mode and emits horizontal wheel
+# events using the same `scroll_speed_steps` and `deadzone_units` as the
+# vertical axis. Both axes can scroll simultaneously when the pointer moves
+# diagonally. Set to false to restrict autoscroll to the vertical axis only.
+horizontal_scroll = true
 
 # Safety cap on the number of detents emitted in a single tick. Prevents a
 # pathologically large dt (e.g. system was paused) from generating a giant

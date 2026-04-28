@@ -6,8 +6,11 @@ pub struct Engine {
     config: CoreConfig,
     state: EngineState,
     offset_y_units: i32,
-    detent_accumulator: f64,
-    hires_accumulator: f64,
+    offset_x_units: i32,
+    detent_accumulator_y: f64,
+    hires_accumulator_y: f64,
+    detent_accumulator_x: f64,
+    hires_accumulator_x: f64,
     pending_motion: Vec<(i32, i32)>,
 }
 
@@ -17,8 +20,11 @@ impl Engine {
             config,
             state: EngineState::Idle,
             offset_y_units: 0,
-            detent_accumulator: 0.0,
-            hires_accumulator: 0.0,
+            offset_x_units: 0,
+            detent_accumulator_y: 0.0,
+            hires_accumulator_y: 0.0,
+            detent_accumulator_x: 0.0,
+            hires_accumulator_x: 0.0,
             pending_motion: Vec::new(),
         }
     }
@@ -35,6 +41,10 @@ impl Engine {
         self.offset_y_units
     }
 
+    pub const fn offset_x_units(&self) -> i32 {
+        self.offset_x_units
+    }
+
     pub fn process(&mut self, event: CoreInputEvent) -> Vec<CoreAction> {
         match self.state {
             EngineState::Idle => self.process_idle(event),
@@ -47,9 +57,7 @@ impl Engine {
         match event {
             CoreInputEvent::MiddleDown => {
                 self.state = EngineState::MiddlePending;
-                self.offset_y_units = 0;
-                self.detent_accumulator = 0.0;
-                self.hires_accumulator = 0.0;
+                self.reset_offsets_and_accumulators();
                 self.pending_motion.clear();
                 vec![CoreAction::Suppress]
             }
@@ -107,7 +115,7 @@ impl Engine {
             CoreInputEvent::RightDown => Self::forward_btn(MouseButton::Right, true),
             CoreInputEvent::RightUp => Self::forward_btn(MouseButton::Right, false),
             CoreInputEvent::Motion { dx, dy } => {
-                self.accumulate_offset(dy);
+                self.accumulate_offset(dx, dy);
 
                 let suppressed = self.config.suppress_motion_while_pending;
                 if self.config.replay_pending_motion_on_click && suppressed {
@@ -121,7 +129,7 @@ impl Engine {
                     actions.push(CoreAction::ForwardMotion { dx, dy });
                 }
 
-                if self.offset_y_units.abs() > self.config.deadzone_units {
+                if self.crossed_deadzone() {
                     self.state = EngineState::Scrolling;
                     self.pending_motion.clear();
                     actions.push(CoreAction::EnterScrollMode);
@@ -161,7 +169,7 @@ impl Engine {
             CoreInputEvent::RightDown => Self::forward_btn(MouseButton::Right, true),
             CoreInputEvent::RightUp => Self::forward_btn(MouseButton::Right, false),
             CoreInputEvent::Motion { dx, dy } => {
-                self.accumulate_offset(dy);
+                self.accumulate_offset(dx, dy);
                 if self.config.suppress_motion_while_scrolling {
                     vec![CoreAction::Suppress]
                 } else {
@@ -192,15 +200,31 @@ impl Engine {
 
     fn reset_to_idle(&mut self) {
         self.state = EngineState::Idle;
-        self.offset_y_units = 0;
-        self.detent_accumulator = 0.0;
-        self.hires_accumulator = 0.0;
+        self.reset_offsets_and_accumulators();
         self.pending_motion.clear();
     }
 
-    fn accumulate_offset(&mut self, dy: i32) {
+    fn reset_offsets_and_accumulators(&mut self) {
+        self.offset_y_units = 0;
+        self.offset_x_units = 0;
+        self.detent_accumulator_y = 0.0;
+        self.hires_accumulator_y = 0.0;
+        self.detent_accumulator_x = 0.0;
+        self.hires_accumulator_x = 0.0;
+    }
+
+    fn accumulate_offset(&mut self, dx: i32, dy: i32) {
         let max = self.config.max_offset_units;
-        self.offset_y_units = (self.offset_y_units.saturating_add(dy)).clamp(-max, max);
+        self.offset_y_units = self.offset_y_units.saturating_add(dy).clamp(-max, max);
+        if self.config.horizontal_scroll {
+            self.offset_x_units = self.offset_x_units.saturating_add(dx).clamp(-max, max);
+        }
+    }
+
+    const fn crossed_deadzone(&self) -> bool {
+        self.offset_y_units.abs() > self.config.deadzone_units
+            || (self.config.horizontal_scroll
+                && self.offset_x_units.abs() > self.config.deadzone_units)
     }
 
     fn forward_btn(button: MouseButton, pressed: bool) -> Vec<CoreAction> {
@@ -208,41 +232,102 @@ impl Engine {
     }
 
     fn tick(&mut self, dt_micros: u64) -> Vec<CoreAction> {
-        let speed = self.compute_speed_detents_per_second();
-        let sign = self.wheel_sign();
-        if speed == 0.0 || sign == 0 {
-            return Vec::new();
+        let dt_seconds = dt_micros as f64 / 1_000_000.0;
+        let mut actions = Vec::new();
+        self.tick_axis_vertical(dt_seconds, &mut actions);
+        if self.config.horizontal_scroll {
+            self.tick_axis_horizontal(dt_seconds, &mut actions);
         }
+        actions
+    }
 
+    fn tick_axis_vertical(&mut self, dt_seconds: f64, actions: &mut Vec<CoreAction>) {
+        let distance = self.offset_y_units.unsigned_abs() as i32;
+        let speed = self.compute_speed_detents_per_second(distance);
+        let sign = self.wheel_sign_y();
+        if speed == 0.0 || sign == 0 {
+            return;
+        }
         let mut direction = f64::from(sign);
         if self.config.invert_vertical {
             direction = -direction;
         }
-        let dt_seconds = dt_micros as f64 / 1_000_000.0;
         let delta_detents = direction * speed * dt_seconds;
         if !delta_detents.is_finite() {
-            self.detent_accumulator = 0.0;
-            self.hires_accumulator = 0.0;
-            return Vec::new();
+            self.detent_accumulator_y = 0.0;
+            self.hires_accumulator_y = 0.0;
+            return;
         }
-
-        let mut actions = Vec::new();
-
         if self.config.emit_legacy_wheel {
-            self.detent_accumulator += delta_detents;
-            self.drain_legacy_detents(&mut actions);
+            self.detent_accumulator_y += delta_detents;
+            let max = self.config.max_detents_per_tick;
+            for n in Self::drain_legacy_axis(&mut self.detent_accumulator_y, max) {
+                actions.push(CoreAction::EmitWheelDetents {
+                    vertical: n,
+                    horizontal: 0,
+                });
+            }
         }
-
         if self.config.emit_hires_wheel {
-            self.hires_accumulator += delta_detents * HIRES_UNITS_PER_DETENT_F64;
-            self.drain_hires(&mut actions);
+            self.hires_accumulator_y =
+                delta_detents.mul_add(HIRES_UNITS_PER_DETENT_F64, self.hires_accumulator_y);
+            let max_units = self
+                .config
+                .max_detents_per_tick
+                .saturating_mul(HIRES_UNITS_PER_DETENT);
+            if let Some(n) = Self::drain_hires_axis(&mut self.hires_accumulator_y, max_units) {
+                actions.push(CoreAction::EmitWheelHiRes {
+                    vertical_units: n,
+                    horizontal_units: 0,
+                });
+            }
         }
-
-        actions
     }
 
-    fn compute_speed_detents_per_second(&self) -> f64 {
-        let distance = self.offset_y_units.unsigned_abs() as i32;
+    fn tick_axis_horizontal(&mut self, dt_seconds: f64, actions: &mut Vec<CoreAction>) {
+        let distance = self.offset_x_units.unsigned_abs() as i32;
+        let speed = self.compute_speed_detents_per_second(distance);
+        let sign = self.wheel_sign_x();
+        if speed == 0.0 || sign == 0 {
+            return;
+        }
+        let mut direction = f64::from(sign);
+        if self.config.invert_horizontal {
+            direction = -direction;
+        }
+        let delta_detents = direction * speed * dt_seconds;
+        if !delta_detents.is_finite() {
+            self.detent_accumulator_x = 0.0;
+            self.hires_accumulator_x = 0.0;
+            return;
+        }
+        if self.config.emit_legacy_wheel {
+            self.detent_accumulator_x += delta_detents;
+            let max = self.config.max_detents_per_tick;
+            for n in Self::drain_legacy_axis(&mut self.detent_accumulator_x, max) {
+                actions.push(CoreAction::EmitWheelDetents {
+                    vertical: 0,
+                    horizontal: n,
+                });
+            }
+        }
+        if self.config.emit_hires_wheel {
+            self.hires_accumulator_x =
+                delta_detents.mul_add(HIRES_UNITS_PER_DETENT_F64, self.hires_accumulator_x);
+            let max_units = self
+                .config
+                .max_detents_per_tick
+                .saturating_mul(HIRES_UNITS_PER_DETENT);
+            if let Some(n) = Self::drain_hires_axis(&mut self.hires_accumulator_x, max_units) {
+                actions.push(CoreAction::EmitWheelHiRes {
+                    vertical_units: 0,
+                    horizontal_units: n,
+                });
+            }
+        }
+    }
+
+    fn compute_speed_detents_per_second(&self, distance: i32) -> f64 {
         if distance <= self.config.deadzone_units {
             return 0.0;
         }
@@ -264,7 +349,10 @@ impl Engine {
         (max_s - min_s).mul_add(normalized.powf(exp), min_s)
     }
 
-    const fn wheel_sign(&self) -> i32 {
+    /// Vertical wheel sign: pointer moved DOWN (positive `offset_y`) maps to a
+    /// negative `REL_WHEEL` value (scroll content downward). Pointer up
+    /// returns +1.
+    const fn wheel_sign_y(&self) -> i32 {
         if self.offset_y_units > self.config.deadzone_units {
             -1
         } else if self.offset_y_units < -self.config.deadzone_units {
@@ -274,45 +362,49 @@ impl Engine {
         }
     }
 
-    fn drain_legacy_detents(&mut self, actions: &mut Vec<CoreAction>) {
-        loop {
-            let raw = self.detent_accumulator.trunc() as i32;
-            if raw == 0 {
-                break;
-            }
-            let max = self.config.max_detents_per_tick;
-            let n = raw.clamp(-max, max);
-            actions.push(CoreAction::EmitWheelDetents {
-                vertical: n,
-                horizontal: 0,
-            });
-            self.detent_accumulator -= f64::from(n);
-            if n != raw {
-                self.detent_accumulator = 0.0;
-                break;
-            }
+    /// Horizontal wheel sign: pointer moved RIGHT (positive `offset_x`) maps
+    /// to a positive `REL_HWHEEL` value (scroll content rightward). Pointer
+    /// left returns -1.
+    const fn wheel_sign_x(&self) -> i32 {
+        if self.offset_x_units > self.config.deadzone_units {
+            1
+        } else if self.offset_x_units < -self.config.deadzone_units {
+            -1
+        } else {
+            0
         }
     }
 
-    fn drain_hires(&mut self, actions: &mut Vec<CoreAction>) {
-        let raw = self.hires_accumulator.trunc() as i32;
+    fn drain_legacy_axis(accumulator: &mut f64, max: i32) -> Vec<i32> {
+        let mut out = Vec::new();
+        loop {
+            let raw = accumulator.trunc() as i32;
+            if raw == 0 {
+                break;
+            }
+            let n = raw.clamp(-max, max);
+            out.push(n);
+            *accumulator -= f64::from(n);
+            if n != raw {
+                *accumulator = 0.0;
+                break;
+            }
+        }
+        out
+    }
+
+    fn drain_hires_axis(accumulator: &mut f64, max_units: i32) -> Option<i32> {
+        let raw = accumulator.trunc() as i32;
         if raw == 0 {
-            return;
+            return None;
         }
-        let max_units = self
-            .config
-            .max_detents_per_tick
-            .saturating_mul(HIRES_UNITS_PER_DETENT);
         let n = raw.clamp(-max_units, max_units);
-        actions.push(CoreAction::EmitWheelHiRes {
-            vertical_units: n,
-            horizontal_units: 0,
-        });
         if n == raw {
-            self.hires_accumulator -= f64::from(n);
+            *accumulator -= f64::from(n);
         } else {
-            self.hires_accumulator = 0.0;
+            *accumulator = 0.0;
         }
+        Some(n)
     }
 }
 

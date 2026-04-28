@@ -30,6 +30,28 @@ fn count_hires(actions: &[CoreAction]) -> i32 {
         .sum()
 }
 
+fn count_detents_h(actions: &[CoreAction]) -> i32 {
+    actions
+        .iter()
+        .filter_map(|a| match a {
+            CoreAction::EmitWheelDetents { horizontal, .. } => Some(*horizontal),
+            _ => None,
+        })
+        .sum()
+}
+
+fn count_hires_h(actions: &[CoreAction]) -> i32 {
+    actions
+        .iter()
+        .filter_map(|a| match a {
+            CoreAction::EmitWheelHiRes {
+                horizontal_units, ..
+            } => Some(*horizontal_units),
+            _ => None,
+        })
+        .sum()
+}
+
 fn run_for(engine: &mut Engine, secs: f64, dt_micros: u64) -> Vec<CoreAction> {
     let total_us = (secs * 1_000_000.0) as u64;
     let mut all = Vec::new();
@@ -622,4 +644,268 @@ fn speed_curve_respects_max_at_full_speed_offset() {
         detents <= upper,
         "expected <= {upper} detents at max speed, got {detents}"
     );
+}
+
+fn engine_horizontal() -> Engine {
+    engine_with(CoreConfig {
+        horizontal_scroll: true,
+        ..CoreConfig::default()
+    })
+}
+
+#[test]
+fn horizontal_motion_is_ignored_when_horizontal_scroll_disabled() {
+    let mut e = engine_with(CoreConfig {
+        horizontal_scroll: false,
+        ..CoreConfig::default()
+    });
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 200, dy: 0 });
+
+    assert_eq!(e.offset_x_units(), 0);
+    assert_eq!(e.state(), EngineState::MiddlePending);
+
+    let actions = run_for(&mut e, 1.0, 8333);
+    assert_eq!(count_detents_h(&actions), 0);
+    assert_eq!(count_hires_h(&actions), 0);
+}
+
+#[test]
+fn horizontal_motion_above_deadzone_enters_scroll_mode() {
+    let mut e = engine_horizontal();
+    e.process(CoreInputEvent::MiddleDown);
+    let actions = e.process(CoreInputEvent::Motion { dx: 11, dy: 0 });
+    assert!(actions.contains(&CoreAction::EnterScrollMode));
+    assert_eq!(e.state(), EngineState::Scrolling);
+}
+
+#[test]
+fn horizontal_deadzone_does_not_scroll_inside_band() {
+    let mut e = engine_horizontal();
+    e.process(CoreInputEvent::MiddleDown);
+    let actions = e.process(CoreInputEvent::Motion { dx: 5, dy: 0 });
+
+    assert!(!actions.contains(&CoreAction::EnterScrollMode));
+    assert_eq!(e.state(), EngineState::MiddlePending);
+
+    let tick = e.process(CoreInputEvent::Tick { dt_micros: 8333 });
+    assert!(tick.is_empty());
+}
+
+#[test]
+fn scroll_right_emits_positive_horizontal_legacy_detents() {
+    let mut e = engine_horizontal();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 120, dy: 0 });
+    let actions = run_for(&mut e, 1.0, 8333);
+    let total = count_detents_h(&actions);
+    assert!(
+        total > 0,
+        "expected positive horizontal detents, got {total}"
+    );
+    assert_eq!(
+        count_detents(&actions),
+        0,
+        "no vertical detents expected for pure horizontal motion"
+    );
+}
+
+#[test]
+fn scroll_left_emits_negative_horizontal_legacy_detents() {
+    let mut e = engine_horizontal();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: -120, dy: 0 });
+    let actions = run_for(&mut e, 1.0, 8333);
+    let total = count_detents_h(&actions);
+    assert!(
+        total < 0,
+        "expected negative horizontal detents, got {total}"
+    );
+}
+
+#[test]
+fn higher_horizontal_offset_produces_more_detents_per_second() {
+    let mut slow = engine_horizontal();
+    slow.process(CoreInputEvent::MiddleDown);
+    slow.process(CoreInputEvent::Motion { dx: 30, dy: 0 });
+    let slow_actions = run_for(&mut slow, 1.0, 8333);
+
+    let mut fast = engine_horizontal();
+    fast.process(CoreInputEvent::MiddleDown);
+    fast.process(CoreInputEvent::Motion { dx: 120, dy: 0 });
+    let fast_actions = run_for(&mut fast, 1.0, 8333);
+
+    let slow_total = count_detents_h(&slow_actions).abs();
+    let fast_total = count_detents_h(&fast_actions).abs();
+    assert!(
+        fast_total > slow_total,
+        "expected fast ({fast_total}) > slow ({slow_total})"
+    );
+}
+
+#[test]
+fn horizontal_return_to_deadzone_stops_scrolling() {
+    let mut e = engine_horizontal();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 120, dy: 0 });
+    e.process(CoreInputEvent::Motion { dx: -115, dy: 0 });
+
+    assert!(e.offset_x_units().abs() <= 10);
+
+    let mut total = 0i32;
+    for _ in 0..120 {
+        let actions = e.process(CoreInputEvent::Tick { dt_micros: 8333 });
+        total += count_detents_h(&actions);
+    }
+    assert_eq!(
+        total, 0,
+        "no horizontal detents should be emitted in deadzone"
+    );
+}
+
+#[test]
+fn horizontal_crossing_zero_inverts_scroll_direction() {
+    let mut e = engine_horizontal();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 100, dy: 0 });
+    let right = run_for(&mut e, 0.5, 8333);
+    let right_total = count_detents_h(&right);
+    assert!(right_total > 0, "expected scroll right, got {right_total}");
+
+    e.process(CoreInputEvent::Motion { dx: -220, dy: 0 });
+    assert!(e.offset_x_units() < 0);
+
+    let left = run_for(&mut e, 0.5, 8333);
+    let left_total = count_detents_h(&left);
+    assert!(
+        left_total < 0,
+        "expected scroll left after inversion, got {left_total}"
+    );
+}
+
+#[test]
+fn invert_horizontal_flips_scroll_signs() {
+    let cfg = CoreConfig {
+        horizontal_scroll: true,
+        invert_horizontal: true,
+        ..CoreConfig::default()
+    };
+    let mut e = engine_with(cfg);
+
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 120, dy: 0 });
+    let actions = run_for(&mut e, 1.0, 8333);
+    let total = count_detents_h(&actions);
+    assert!(
+        total < 0,
+        "with invert_horizontal, mouse-right should produce negative detents; got {total}"
+    );
+}
+
+#[test]
+fn horizontal_hires_units_track_legacy_detents_at_120_per_detent() {
+    let mut e = engine_horizontal();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 240, dy: 0 });
+    let actions = run_for(&mut e, 2.0, 8333);
+
+    let detents = count_detents_h(&actions);
+    let hires = count_hires_h(&actions);
+
+    let ratio = f64::from(hires) / f64::from(detents);
+    assert!(
+        (ratio - 120.0).abs() < 5.0,
+        "expected ~120 hi-res units per detent, got ratio={ratio}"
+    );
+}
+
+#[test]
+fn horizontal_and_vertical_scroll_independently_in_diagonal_motion() {
+    let mut e = engine_horizontal();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 120, dy: 120 });
+
+    let actions = run_for(&mut e, 1.0, 8333);
+    let v = count_detents(&actions);
+    let h = count_detents_h(&actions);
+
+    assert!(v < 0, "vertical down should be negative, got {v}");
+    assert!(h > 0, "horizontal right should be positive, got {h}");
+}
+
+#[test]
+fn horizontal_scroll_speed_steps_pick_last_reached_distance() {
+    let cfg = CoreConfig {
+        horizontal_scroll: true,
+        emit_hires_wheel: false,
+        scroll_speed_steps: vec![
+            SpeedStep {
+                distance_units: 20,
+                speed_detents_per_second: 2.0,
+            },
+            SpeedStep {
+                distance_units: 100,
+                speed_detents_per_second: 8.0,
+            },
+        ],
+        ..CoreConfig::default()
+    };
+
+    let mut slow = engine_with(cfg.clone());
+    slow.process(CoreInputEvent::MiddleDown);
+    slow.process(CoreInputEvent::Motion { dx: 30, dy: 0 });
+    let slow_detents = count_detents_h(&run_for(&mut slow, 1.0, 100_000)).abs();
+
+    let mut fast = engine_with(cfg);
+    fast.process(CoreInputEvent::MiddleDown);
+    fast.process(CoreInputEvent::Motion { dx: 120, dy: 0 });
+    let fast_detents = count_detents_h(&run_for(&mut fast, 1.0, 100_000)).abs();
+
+    assert!(
+        (1..=3).contains(&slow_detents),
+        "expected roughly 2 detents, got {slow_detents}"
+    );
+    assert!(
+        (7..=9).contains(&fast_detents),
+        "expected roughly 8 detents, got {fast_detents}"
+    );
+}
+
+#[test]
+fn horizontal_offset_is_clamped_to_max_offset_units() {
+    let mut e = engine_horizontal();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 100_000, dy: 0 });
+    assert_eq!(e.offset_x_units(), 240);
+
+    e.process(CoreInputEvent::Motion {
+        dx: -1_000_000,
+        dy: 0,
+    });
+    assert_eq!(e.offset_x_units(), -240);
+}
+
+#[test]
+fn horizontal_motion_inside_deadzone_does_not_disturb_short_click() {
+    let mut e = engine_horizontal();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 4, dy: 0 });
+    e.process(CoreInputEvent::Motion { dx: -3, dy: 0 });
+    let up = e.process(CoreInputEvent::MiddleUp);
+    assert_eq!(up, vec![CoreAction::EmitMiddleClick]);
+    assert_eq!(e.state(), EngineState::Idle);
+}
+
+#[test]
+fn horizontal_release_during_scroll_returns_to_idle() {
+    let mut e = engine_horizontal();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 100, dy: 0 });
+    let _ = run_for(&mut e, 0.2, 8333);
+
+    let release = e.process(CoreInputEvent::MiddleUp);
+    assert!(release.contains(&CoreAction::ExitScrollMode));
+    assert!(!release.contains(&CoreAction::EmitMiddleClick));
+    assert_eq!(e.state(), EngineState::Idle);
+    assert_eq!(e.offset_x_units(), 0);
 }

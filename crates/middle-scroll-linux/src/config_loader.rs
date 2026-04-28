@@ -41,6 +41,7 @@ pub struct CoreFileConfig {
     pub tick_hz: Option<u32>,
 
     pub invert_vertical: Option<bool>,
+    pub invert_horizontal: Option<bool>,
 
     pub suppress_motion_while_pending: Option<bool>,
     pub suppress_motion_while_scrolling: Option<bool>,
@@ -85,6 +86,9 @@ impl CoreFileConfig {
         }
         if let Some(v) = self.invert_vertical {
             base.invert_vertical = v;
+        }
+        if let Some(v) = self.invert_horizontal {
+            base.invert_horizontal = v;
         }
         if let Some(v) = self.suppress_motion_while_pending {
             base.suppress_motion_while_pending = v;

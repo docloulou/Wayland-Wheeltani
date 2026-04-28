@@ -38,6 +38,7 @@ pub struct CoreConfig {
     pub tick_hz: u32,
 
     pub invert_vertical: bool,
+    pub invert_horizontal: bool,
 
     pub suppress_motion_while_pending: bool,
     pub suppress_motion_while_scrolling: bool,
@@ -67,6 +68,7 @@ impl Default for CoreConfig {
             tick_hz: 120,
 
             invert_vertical: false,
+            invert_horizontal: false,
 
             suppress_motion_while_pending: true,
             suppress_motion_while_scrolling: true,
@@ -75,7 +77,7 @@ impl Default for CoreConfig {
             emit_hires_wheel: true,
             emit_legacy_wheel: true,
 
-            horizontal_scroll: false,
+            horizontal_scroll: true,
             max_detents_per_tick: 4,
         }
     }
