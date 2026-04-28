@@ -275,7 +275,11 @@ impl Engine {
                 .config
                 .max_detents_per_tick
                 .saturating_mul(HIRES_UNITS_PER_DETENT);
-            if let Some(n) = Self::drain_hires_axis(&mut self.hires_accumulator_y, max_units) {
+            if let Some(n) = Self::drain_hires_axis(
+                &mut self.hires_accumulator_y,
+                max_units,
+                self.config.min_hires_units_per_event,
+            ) {
                 actions.push(CoreAction::EmitWheelHiRes {
                     vertical_units: n,
                     horizontal_units: 0,
@@ -318,7 +322,11 @@ impl Engine {
                 .config
                 .max_detents_per_tick
                 .saturating_mul(HIRES_UNITS_PER_DETENT);
-            if let Some(n) = Self::drain_hires_axis(&mut self.hires_accumulator_x, max_units) {
+            if let Some(n) = Self::drain_hires_axis(
+                &mut self.hires_accumulator_x,
+                max_units,
+                self.config.min_hires_units_per_event,
+            ) {
                 actions.push(CoreAction::EmitWheelHiRes {
                     vertical_units: 0,
                     horizontal_units: n,
@@ -393,9 +401,9 @@ impl Engine {
         out
     }
 
-    fn drain_hires_axis(accumulator: &mut f64, max_units: i32) -> Option<i32> {
+    fn drain_hires_axis(accumulator: &mut f64, max_units: i32, min_units: i32) -> Option<i32> {
         let raw = accumulator.trunc() as i32;
-        if raw == 0 {
+        if raw.unsigned_abs() < min_units as u32 {
             return None;
         }
         let n = raw.clamp(-max_units, max_units);

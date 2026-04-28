@@ -49,6 +49,7 @@ pub struct CoreFileConfig {
 
     pub emit_hires_wheel: Option<bool>,
     pub emit_legacy_wheel: Option<bool>,
+    pub min_hires_units_per_event: Option<i32>,
 
     pub horizontal_scroll: Option<bool>,
     pub max_detents_per_tick: Option<i32>,
@@ -104,6 +105,9 @@ impl CoreFileConfig {
         }
         if let Some(v) = self.emit_legacy_wheel {
             base.emit_legacy_wheel = v;
+        }
+        if let Some(v) = self.min_hires_units_per_event {
+            base.min_hires_units_per_event = v;
         }
         if let Some(v) = self.horizontal_scroll {
             base.horizontal_scroll = v;
@@ -404,6 +408,18 @@ mod tests {
             loaded.core.scroll_speed_steps.unwrap()[0].distance_units,
             50
         );
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn resolve_loads_min_hires_units_per_event() {
+        let path = temp_config_path("hires-threshold");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "min_hires_units_per_event = 30\n").unwrap();
+
+        let resolved = resolve(&args_with_config(path.clone())).unwrap();
+        assert_eq!(resolved.core.min_hires_units_per_event, 30);
+
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 

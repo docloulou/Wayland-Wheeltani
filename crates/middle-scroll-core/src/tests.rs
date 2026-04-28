@@ -30,6 +30,13 @@ fn count_hires(actions: &[CoreAction]) -> i32 {
         .sum()
 }
 
+fn count_hires_events(actions: &[CoreAction]) -> usize {
+    actions
+        .iter()
+        .filter(|a| matches!(a, CoreAction::EmitWheelHiRes { .. }))
+        .count()
+}
+
 fn count_detents_h(actions: &[CoreAction]) -> i32 {
     actions
         .iter()
@@ -137,6 +144,17 @@ fn config_rejects_bad_speed_step_speed() {
         ..CoreConfig::default()
     };
     assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn config_rejects_bad_min_hires_units_per_event() {
+    for min_hires_units_per_event in [0, 121] {
+        let cfg = CoreConfig {
+            min_hires_units_per_event,
+            ..CoreConfig::default()
+        };
+        assert!(cfg.validate().is_err());
+    }
 }
 
 #[test]
@@ -343,6 +361,43 @@ fn hires_units_track_legacy_detents_at_120_per_detent() {
     assert!(
         (ratio - 120.0).abs() < 5.0,
         "expected ~120 hi-res units per detent, got ratio={ratio}"
+    );
+}
+
+#[test]
+fn hires_events_are_grouped_by_minimum_units_without_changing_total_distance() {
+    let cfg = CoreConfig {
+        emit_legacy_wheel: false,
+        min_hires_units_per_event: 15,
+        scroll_speed_steps: vec![SpeedStep {
+            distance_units: 11,
+            speed_detents_per_second: 1.5,
+        }],
+        ..CoreConfig::default()
+    };
+    let mut grouped = engine_with(cfg.clone());
+    grouped.process(CoreInputEvent::MiddleDown);
+    grouped.process(CoreInputEvent::Motion { dx: 0, dy: 11 });
+    let grouped_actions = run_for(&mut grouped, 1.0, 8333);
+
+    let mut ungrouped = engine_with(CoreConfig {
+        min_hires_units_per_event: 1,
+        ..cfg
+    });
+    ungrouped.process(CoreInputEvent::MiddleDown);
+    ungrouped.process(CoreInputEvent::Motion { dx: 0, dy: 11 });
+    let ungrouped_actions = run_for(&mut ungrouped, 1.0, 8333);
+
+    assert!(
+        count_hires_events(&grouped_actions) < count_hires_events(&ungrouped_actions),
+        "grouping should reduce hi-res event count"
+    );
+
+    let grouped_units = count_hires(&grouped_actions).abs();
+    let ungrouped_units = count_hires(&ungrouped_actions).abs();
+    assert!(
+        (ungrouped_units - grouped_units).abs() <= 15,
+        "grouping should preserve total distance within one threshold: grouped={grouped_units}, ungrouped={ungrouped_units}"
     );
 }
 

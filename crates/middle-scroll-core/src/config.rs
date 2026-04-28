@@ -46,6 +46,7 @@ pub struct CoreConfig {
 
     pub emit_hires_wheel: bool,
     pub emit_legacy_wheel: bool,
+    pub min_hires_units_per_event: i32,
 
     pub horizontal_scroll: bool,
     pub max_detents_per_tick: i32,
@@ -76,6 +77,7 @@ impl Default for CoreConfig {
 
             emit_hires_wheel: true,
             emit_legacy_wheel: true,
+            min_hires_units_per_event: 15,
 
             horizontal_scroll: true,
             max_detents_per_tick: 4,
@@ -103,6 +105,8 @@ pub enum ConfigError {
     BadTickHz(u32),
     #[error("max_detents_per_tick must be >= 1, got {0}")]
     BadMaxDetents(i32),
+    #[error("min_hires_units_per_event must be in 1..=120, got {0}")]
+    BadMinHiResUnits(i32),
     #[error("scroll_speed_steps[{index}].distance_units must be > deadzone_units ({deadzone}), got {distance}")]
     BadSpeedStepDistance {
         index: usize,
@@ -164,6 +168,11 @@ impl CoreConfig {
         }
         if self.max_detents_per_tick < 1 {
             return Err(ConfigError::BadMaxDetents(self.max_detents_per_tick));
+        }
+        if !(1..=120).contains(&self.min_hires_units_per_event) {
+            return Err(ConfigError::BadMinHiResUnits(
+                self.min_hires_units_per_event,
+            ));
         }
         let mut previous_distance = None;
         for (index, step) in self.scroll_speed_steps.iter().enumerate() {

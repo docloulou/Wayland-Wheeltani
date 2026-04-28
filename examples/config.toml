@@ -102,6 +102,13 @@ replay_pending_motion_on_click = false
 emit_hires_wheel = true
 emit_legacy_wheel = true
 
+# Minimum accumulated hi-res units before emitting a hi-res wheel event.
+# 120 units = one detent; 15 units = 8 smooth samples per detent. Raising this
+# can reduce tiny uinput events in applications that stutter under high-rate
+# synthetic scrolling. Lowering it can make modern hi-res-aware apps feel more
+# continuous at very slow speeds.
+min_hires_units_per_event = 15
+
 # Enable horizontal scroll. When true (default), horizontal pointer motion
 # (REL_X) past the deadzone enters scroll mode and emits horizontal wheel
 # events using the same `scroll_speed_steps` and `deadzone_units` as the

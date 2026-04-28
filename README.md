@@ -2,17 +2,19 @@
 
 Progressive middle-click autoscroll for Wayland.
 
-Hold the middle mouse button, move vertically, and Wayland-Wheeltani emits smooth
-wheel events through a virtual mouse. Release the middle button and scrolling
-stops immediately. A short middle click still behaves like a normal middle click.
+Hold the middle mouse button, move vertically or horizontally, and
+Wayland-Wheeltani emits smooth wheel events through a virtual mouse. Release the
+middle button and scrolling stops immediately. A short middle click still behaves
+like a normal middle click.
 
 ```text
 hold middle button
   ├─ tiny movement inside deadzone       → normal middle click on release
   ├─ move down from press position       → continuous scroll down
+  ├─ move right from press position      → continuous horizontal scroll right
   ├─ move farther from press position    → faster scroll
   ├─ return near press position          → scroll slows/stops
-  └─ cross above press position          → scroll reverses
+  └─ cross the press position            → scroll reverses on that axis
 ```
 
 No GUI, no overlay, no network, no keyboard capture. The project is split into a
@@ -186,7 +188,8 @@ See [`examples/config.toml`](examples/config.toml) for every tunable option.
 ### Scroll speed steps
 
 Scroll speed is configurable by distance from the original middle-button press
-point. The config uses ordered `[[scroll_speed_steps]]` entries:
+point. The same steps apply to vertical and horizontal autoscroll. The config
+uses ordered `[[scroll_speed_steps]]` entries:
 
 ```toml
 [[scroll_speed_steps]]
@@ -199,13 +202,21 @@ speed_detents_per_second = 10.0
 ```
 
 The last reached distance step wins. So if the pointer is 90 units away from the
-press point, the example above scrolls at `10.0` detents/s. Direction is still
-based on whether the pointer moved above or below the original press point.
+press point on either axis, the example above scrolls at `10.0` detents/s.
+Direction is based on which side of the original press point the pointer is on.
 
 Set `scroll_speed_steps = []` to disable stepped mode and use the continuous
 fallback curve controlled by `min_speed_detents_per_second`,
 `max_speed_detents_per_second`, `full_speed_units`, and
 `acceleration_exponent`.
+
+`horizontal_scroll = true` by default. Set it to `false` to restrict autoscroll
+to the vertical axis only.
+
+`min_hires_units_per_event` controls how many hi-res wheel units are accumulated
+before one hi-res event is emitted. The default `15` gives 8 smooth samples per
+detent (`120` units) and reduces tiny synthetic event spam in apps that stutter
+under high-rate scrolling.
 
 ## Does it need sudo?
 

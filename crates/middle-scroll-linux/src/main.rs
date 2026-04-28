@@ -232,11 +232,7 @@ mod linux {
 
             let now = Instant::now();
             let until_next_tick = tick_period.saturating_sub(now.duration_since(*last_tick));
-            let timeout_ms: u16 = until_next_tick
-                .as_millis()
-                .min(u128::from(u16::MAX))
-                .try_into()
-                .unwrap_or(u16::MAX);
+            let timeout_ms = poll_timeout_millis(until_next_tick);
 
             let readable = {
                 let fd = physical.as_fd();
@@ -400,5 +396,32 @@ mod linux {
             }
         }
         batch.clear();
+    }
+
+    fn poll_timeout_millis(until_next_tick: Duration) -> u16 {
+        until_next_tick
+            .as_micros()
+            .div_ceil(1_000)
+            .min(u128::from(u16::MAX))
+            .try_into()
+            .unwrap_or(u16::MAX)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn poll_timeout_rounds_sub_millisecond_deadlines_up() {
+            assert_eq!(poll_timeout_millis(Duration::ZERO), 0);
+            assert_eq!(poll_timeout_millis(Duration::from_micros(1)), 1);
+            assert_eq!(poll_timeout_millis(Duration::from_micros(999)), 1);
+            assert_eq!(poll_timeout_millis(Duration::from_micros(1_001)), 2);
+        }
+
+        #[test]
+        fn poll_timeout_saturates_at_poll_limit() {
+            assert_eq!(poll_timeout_millis(Duration::from_secs(120)), u16::MAX);
+        }
     }
 }
