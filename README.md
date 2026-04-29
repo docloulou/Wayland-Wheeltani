@@ -1,3 +1,5 @@
+[![CodeQL](https://github.com/docloulou/Wayland-Wheeltani/actions/workflows/codeql.yml/badge.svg)](https://github.com/docloulou/Wayland-Wheeltani/actions/workflows/codeql.yml)
+
 # Wayland-Wheeltani
 
 Progressive middle-click autoscroll for Wayland.
