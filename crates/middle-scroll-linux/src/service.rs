@@ -119,7 +119,7 @@ fn ensure_user_service_context() -> anyhow::Result<()> {
 }
 
 fn user_service_path() -> anyhow::Result<PathBuf> {
-    let dirs = ProjectDirs::from("", "", "Wayland-Wheeltani")
+    let dirs = ProjectDirs::from("", "", config_loader::APP_DIR)
         .context("failed to resolve user config directory")?;
     let config_dir = dirs.config_dir();
     let user_config_root = config_dir

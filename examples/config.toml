@@ -4,9 +4,24 @@
 # Every field is optional: missing values fall back to the built-in defaults
 # shown below. CLI flags always override config file values.
 
-# Path to the physical mouse evdev node. Generate this interactively with
-# `wayland-wheeltani --setup`, or find candidates with `--list-devices`.
-# device = "/dev/input/event12"
+# --- device selection ------------------------------------------------------
+#
+# Two ways to point the daemon at your mouse:
+#
+# 1) (RECOMMENDED) Match by USB ids; stable across reboots and USB renumbering.
+#    Generated automatically by `wayland-wheeltani --setup`. Find candidates
+#    and their ids with `--list-devices` (look at `usb-id: vvvv:pppp`).
+#
+#    [device_match]
+#    vendor_id = "046d"
+#    product_id = "c539"
+#    # name = "Logitech USB Receiver"   # optional, disambiguates duplicates
+#    # phys = "usb-0000:00:14.0-5/input2"  # optional, pin to a USB port
+#
+# 2) (LEGACY) Hard-code the evdev node. The kernel renumbers `eventXX` on
+#    every reboot, so this is fragile; prefer `[device_match]` instead.
+#
+#    device = "/dev/input/event12"
 
 # Whether to grab the physical device exclusively. With grab=true the
 # compositor only sees the synthetic events from the virtual mouse, which is

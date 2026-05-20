@@ -1,17 +1,42 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use evdev::{Device, KeyCode, RelativeAxisCode};
+use evdev::{BusType, Device, KeyCode, RelativeAxisCode};
 
 use crate::virtual_mouse::VIRTUAL_MOUSE_NAME;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DeviceInfo {
     pub path: PathBuf,
     pub name: String,
     pub phys: Option<String>,
+    pub unique_name: Option<String>,
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub bus_type: u16,
     pub keys: Vec<KeyCode>,
     pub axes: Vec<RelativeAxisCode>,
+}
+
+impl DeviceInfo {
+    pub fn vendor_hex(&self) -> String {
+        format!("{:04x}", self.vendor_id)
+    }
+
+    pub fn product_hex(&self) -> String {
+        format!("{:04x}", self.product_id)
+    }
+}
+
+/// Criteria for matching a physical device across reboots. `vendor_id` and
+/// `product_id` are mandatory; `name` and `phys` further narrow the match
+/// when several devices share the same USB IDs (e.g. two identical mice).
+#[derive(Debug, Clone)]
+pub struct MatchCriteria<'a> {
+    pub vendor_id: u16,
+    pub product_id: u16,
+    pub name: Option<&'a str>,
+    pub phys: Option<&'a str>,
 }
 
 pub fn enumerate_mice() -> Vec<DeviceInfo> {
@@ -23,6 +48,37 @@ pub fn enumerate_mice() -> Vec<DeviceInfo> {
     }
     out.sort_by(|a, b| a.path.cmp(&b.path));
     out
+}
+
+/// Returns the first mouse-like device whose attributes match the given
+/// criteria. Stable across reboots as long as the USB device is plugged in,
+/// regardless of which `/dev/input/eventXX` number the kernel assigns.
+pub fn find_match(criteria: &MatchCriteria<'_>) -> Option<DeviceInfo> {
+    enumerate_mice().into_iter().find(|d| matches(d, criteria))
+}
+
+/// Opens a specific evdev node and returns its `DeviceInfo`. Returns `None`
+/// if the device does not look like a mouse or cannot be opened.
+pub fn probe(path: &Path) -> Option<DeviceInfo> {
+    let dev = Device::open(path).ok()?;
+    inspect(path, &dev)
+}
+
+fn matches(dev: &DeviceInfo, criteria: &MatchCriteria<'_>) -> bool {
+    if dev.vendor_id != criteria.vendor_id || dev.product_id != criteria.product_id {
+        return false;
+    }
+    if let Some(expected) = criteria.name {
+        if dev.name != expected {
+            return false;
+        }
+    }
+    if let Some(expected) = criteria.phys {
+        if dev.phys.as_deref() != Some(expected) {
+            return false;
+        }
+    }
+    true
 }
 
 fn inspect(path: &Path, dev: &Device) -> Option<DeviceInfo> {
@@ -43,10 +99,15 @@ fn inspect(path: &Path, dev: &Device) -> Option<DeviceInfo> {
         return None;
     }
 
+    let input_id = dev.input_id();
     Some(DeviceInfo {
         path: path.to_path_buf(),
         name,
         phys: dev.physical_path().map(str::to_owned),
+        unique_name: dev.unique_name().map(str::to_owned),
+        vendor_id: input_id.vendor(),
+        product_id: input_id.product(),
+        bus_type: input_id.bus_type().0,
         keys: collect_mouse_buttons(keys),
         axes: collect_relative_axes(axes),
     })
@@ -103,8 +164,18 @@ pub fn print_listing<W: Write>(mut writer: W, devices: &[DeviceInfo]) -> std::io
     for (i, dev) in devices.iter().enumerate() {
         writeln!(writer, "[{}] {}", i + 1, dev.path.display())?;
         writeln!(writer, "    name: {}", dev.name)?;
+        writeln!(
+            writer,
+            "    usb-id: {}:{} (bus: {})",
+            dev.vendor_hex(),
+            dev.product_hex(),
+            BusType(dev.bus_type)
+        )?;
         if let Some(p) = &dev.phys {
             writeln!(writer, "    phys: {p}")?;
+        }
+        if let Some(u) = &dev.unique_name {
+            writeln!(writer, "    unique: {u}")?;
         }
         writeln!(writer, "    supports:")?;
         if !dev.keys.is_empty() {

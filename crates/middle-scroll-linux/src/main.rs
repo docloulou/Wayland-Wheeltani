@@ -48,8 +48,8 @@ mod linux {
     use tracing_subscriber::EnvFilter;
 
     use crate::cli::Args;
-    use crate::config_loader::{self, ResolvedConfig};
-    use crate::device_discovery;
+    use crate::config_loader::{self, ParsedDeviceMatch, ResolvedConfig};
+    use crate::device_discovery::{self, DeviceInfo};
     use crate::errors::DaemonError;
     use crate::event_router::{self, RoutedEvent};
     use crate::indicator::{Indicator, NoopIndicator};
@@ -59,6 +59,11 @@ mod linux {
     use crate::virtual_mouse::VirtualMouse;
 
     const COMPOSITOR_SETTLE_DELAY: Duration = Duration::from_millis(200);
+    /// Total time spent waiting for a `device_match` to appear. Useful when
+    /// the daemon is launched by systemd before USB enumeration completes.
+    const DEVICE_MATCH_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
+    /// Polling interval while waiting for a `device_match`.
+    const DEVICE_MATCH_RETRY_INTERVAL: Duration = Duration::from_millis(500);
 
     pub fn run() -> anyhow::Result<()> {
         let args = Args::parsed();
@@ -85,8 +90,9 @@ mod linux {
         }
 
         let resolved = config_loader::resolve(&args)?;
+        let has_configured_device = resolved.device.is_some() || resolved.device_match.is_some();
         let should_save_device = args.setup
-            || resolved.device.is_none()
+            || !has_configured_device
             || (args.install_service && args.device.is_some())
             || (args.install_udev_rule && args.device.is_some());
         let device_path = if should_save_device {
@@ -106,7 +112,7 @@ mod linux {
             }
             selected
         } else {
-            resolved.device.clone().ok_or(DaemonError::NoDevice)?
+            resolve_device_path(&args, &resolved)?
         };
 
         if args.install_udev_rule {
@@ -120,6 +126,69 @@ mod linux {
         }
 
         run_daemon(&device_path, &resolved)
+    }
+
+    /// Resolves the runtime device path from CLI arg, then `[device_match]`,
+    /// then the legacy `device =` path. Returning here means the config is
+    /// usable but the daemon might still fail later when opening the device.
+    fn resolve_device_path(args: &Args, resolved: &ResolvedConfig) -> anyhow::Result<PathBuf> {
+        if let Some(device) = args.device.clone() {
+            return Ok(device);
+        }
+
+        if let Some(match_cfg) = &resolved.device_match {
+            return resolve_device_match(match_cfg);
+        }
+
+        if let Some(device) = resolved.device.clone() {
+            warn!(
+                device = %device.display(),
+                "config uses legacy `device =` which is not stable across reboots; re-run `wayland-wheeltani --setup` to migrate to `[device_match]`"
+            );
+            return Ok(device);
+        }
+
+        Err(DaemonError::NoDevice.into())
+    }
+
+    fn resolve_device_match(match_cfg: &ParsedDeviceMatch) -> anyhow::Result<PathBuf> {
+        let id = match_cfg.human_id();
+        let criteria = match_cfg.as_criteria();
+
+        if let Some(found) = device_discovery::find_match(&criteria) {
+            info!(
+                usb_id = %id,
+                event = %found.path.display(),
+                "resolved device_match"
+            );
+            return Ok(found.path);
+        }
+
+        warn!(
+            usb_id = %id,
+            "no input device currently matches; waiting up to {:?} for it to appear",
+            DEVICE_MATCH_RETRY_TIMEOUT
+        );
+
+        let started = Instant::now();
+        while started.elapsed() < DEVICE_MATCH_RETRY_TIMEOUT {
+            std::thread::sleep(DEVICE_MATCH_RETRY_INTERVAL);
+            if let Some(found) = device_discovery::find_match(&criteria) {
+                info!(
+                    usb_id = %id,
+                    event = %found.path.display(),
+                    elapsed = ?started.elapsed(),
+                    "resolved device_match after retry"
+                );
+                return Ok(found.path);
+            }
+        }
+
+        Err(DaemonError::DeviceMatchNotFound {
+            vendor_id: match_cfg.vendor_id,
+            product_id: match_cfg.product_id,
+        }
+        .into())
     }
 
     fn select_device(args: &Args) -> anyhow::Result<PathBuf> {
@@ -136,9 +205,7 @@ mod linux {
         }
     }
 
-    fn prompt_device_selection(
-        devices: &[device_discovery::DeviceInfo],
-    ) -> anyhow::Result<PathBuf> {
+    fn prompt_device_selection(devices: &[DeviceInfo]) -> anyhow::Result<PathBuf> {
         println!("No input device is configured yet. Candidate mice:\n");
         device_discovery::print_listing(io::stdout().lock(), devices)?;
         loop {

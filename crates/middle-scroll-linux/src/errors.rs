@@ -15,6 +15,15 @@ pub enum DaemonError {
     #[error("device path does not exist: {0}")]
     DeviceNotFound(PathBuf),
 
+    #[error(
+        "no plugged mouse matches device_match (vendor={vendor_id:04x}, product={product_id:04x}); \
+         is the mouse plugged in? Run `wayland-wheeltani --list-devices` to verify."
+    )]
+    DeviceMatchNotFound { vendor_id: u16, product_id: u16 },
+
+    #[error("invalid device_match.{field} = \"{value}\" (expect a 4-digit hexadecimal USB id like \"046d\")")]
+    DeviceMatchInvalid { field: String, value: String },
+
     #[error("device {path} does not look like a mouse (missing BTN_LEFT or REL_X/REL_Y)")]
     NotAMouse { path: PathBuf },
 

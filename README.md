@@ -177,6 +177,41 @@ CLI flags > config file > built-in defaults
 
 See [`examples/config.toml`](examples/config.toml) for every tunable option.
 
+### Stable device selection across reboots
+
+The kernel renumbers `/dev/input/eventXX` every boot, so a config like
+`device = "/dev/input/event12"` regularly breaks. The recommended fix is to
+let the daemon match the mouse by its **USB vendor and product ids**, which are
+stable for a given device.
+
+Run `wayland-wheeltani --setup` and it will write a `[device_match]` block
+automatically:
+
+```toml
+[device_match]
+vendor_id = "046d"
+product_id = "c539"
+# name = "Logitech USB Receiver"     # optional; disambiguates duplicates
+# phys = "usb-0000:00:14.0-5/input2" # optional; pin to a USB port
+```
+
+At startup the daemon enumerates `/dev/input/event*`, finds the first one that
+matches and uses it. If the mouse is not plugged in yet (e.g. systemd started
+the service before USB enumeration finished), it waits up to ten seconds for
+the device to appear before giving up.
+
+The legacy `device = "/dev/input/event..."` form still works for one-shot
+overrides (or when running with `--device <PATH>`), but new configs should
+prefer `[device_match]`.
+
+Find a device's USB ids with:
+
+```bash
+wayland-wheeltani --list-devices
+```
+
+The output line `usb-id: vvvv:pppp` gives you the values to use.
+
 ### Useful config options
 
 Scroll speed is configured by distance from the original middle-button press
