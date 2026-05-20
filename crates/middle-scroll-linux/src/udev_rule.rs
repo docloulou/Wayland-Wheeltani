@@ -95,7 +95,7 @@ fn render_rule(ids: &DeviceIds) -> String {
     format!(
         "ACTION!=\"add|change\", GOTO=\"wayland_wheeltani_end\"\n\
 \n\
-KERNEL==\"uinput\", MODE=\"0600\", TAG+=\"uaccess\"\n\
+KERNEL==\"uinput\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\"\n\
 \n\
 KERNEL==\"event[0-9]*\", SUBSYSTEM==\"input\", ENV{{ID_VENDOR_ID}}==\"{}\", ENV{{ID_MODEL_ID}}==\"{}\", MODE=\"0600\", TAG+=\"uaccess\"\n\
 \n\
@@ -124,6 +124,7 @@ fn write_rule(path: &Path, contents: &str) -> anyhow::Result<()> {
 fn reload_rules() -> anyhow::Result<()> {
     run_udevadm(&["control", "--reload-rules"])?;
     run_udevadm(&["trigger", "--subsystem-match=input", "--action=change"])?;
+    run_udevadm(&["trigger", "--subsystem-match=misc", "--action=change"])?;
     Ok(())
 }
 
@@ -166,7 +167,7 @@ mod tests {
             vendor: "046d".to_owned(),
             product: "c539".to_owned(),
         });
-        assert!(rule.contains("KERNEL==\"uinput\", MODE=\"0600\", TAG+=\"uaccess\""));
+        assert!(rule.contains("KERNEL==\"uinput\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\""));
         assert!(rule.contains("ENV{ID_VENDOR_ID}==\"046d\""));
         assert!(rule.contains("ENV{ID_MODEL_ID}==\"c539\""));
     }
