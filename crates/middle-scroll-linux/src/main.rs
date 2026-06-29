@@ -49,7 +49,7 @@ mod linux {
 
     use crate::cli::Args;
     use crate::config_loader::{self, ParsedDeviceMatch, ResolvedConfig};
-    use crate::device_discovery::{self, DeviceInfo};
+    use crate::device_discovery::{self, DeviceInfo, MatchCriteria};
     use crate::errors::DaemonError;
     use crate::event_router::{self, RoutedEvent};
     use crate::indicator::{Indicator, NoopIndicator};
@@ -155,13 +155,13 @@ mod linux {
         let id = match_cfg.human_id();
         let criteria = match_cfg.as_criteria();
 
-        if let Some(found) = device_discovery::find_match(&criteria) {
+        if let Some(found) = try_match(&criteria, &id) {
             info!(
                 usb_id = %id,
-                event = %found.path.display(),
+                event = %found.display(),
                 "resolved device_match"
             );
-            return Ok(found.path);
+            return Ok(found);
         }
 
         warn!(
@@ -173,14 +173,14 @@ mod linux {
         let started = Instant::now();
         while started.elapsed() < DEVICE_MATCH_RETRY_TIMEOUT {
             std::thread::sleep(DEVICE_MATCH_RETRY_INTERVAL);
-            if let Some(found) = device_discovery::find_match(&criteria) {
+            if let Some(found) = try_match(&criteria, &id) {
                 info!(
                     usb_id = %id,
-                    event = %found.path.display(),
+                    event = %found.display(),
                     elapsed = ?started.elapsed(),
                     "resolved device_match after retry"
                 );
-                return Ok(found.path);
+                return Ok(found);
             }
         }
 
@@ -189,6 +189,30 @@ mod linux {
             product_id: match_cfg.product_id,
         }
         .into())
+    }
+
+    /// Tries a strict match first (honouring `phys` when configured), then a
+    /// relaxed match that ignores `phys`. The relaxed pass lets legacy configs
+    /// that pinned a USB port keep working when the mouse is moved to another
+    /// port: the device is still found by USB id, just on a different node.
+    fn try_match(criteria: &MatchCriteria<'_>, id: &str) -> Option<PathBuf> {
+        if let Some(found) = device_discovery::find_match(criteria) {
+            return Some(found.path);
+        }
+
+        if criteria.phys.is_some() {
+            if let Some(found) = device_discovery::find_match(&criteria.without_phys()) {
+                warn!(
+                    usb_id = %id,
+                    event = %found.path.display(),
+                    found_phys = ?found.phys,
+                    "mouse found on a different USB port than the one pinned in config; matching by USB id instead (re-run `wayland-wheeltani --setup` to clear the pinned port)"
+                );
+                return Some(found.path);
+            }
+        }
+
+        None
     }
 
     fn select_device(args: &Args) -> anyhow::Result<PathBuf> {

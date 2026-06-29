@@ -78,9 +78,15 @@ the engine fall back to `min_speed_detents_per_second`,
 ## Configuration and setup
 
 The daemon accepts CLI overrides and a TOML config file. `--setup` enumerates
-candidate mice, selects one interactively when needed, and saves the device path
-to the config file. `--install-udev-rule` installs a root-owned udev rule for the
-selected mouse and `/dev/uinput`; `--remove-udev-rule` removes it.
+candidate mice, selects one interactively when needed, and saves a
+`[device_match]` block keyed by USB vendor and product id. This match is
+port-independent by default, so the mouse keeps working on any USB port without
+re-running setup; `--setup --pin-port` additionally records the current port
+(`phys`) to disambiguate identical mice. At startup the daemon resolves the
+match to a `/dev/input/eventX` node, falling back to USB-id matching when a
+previously pinned port no longer holds the device. `--install-udev-rule`
+installs a root-owned udev rule for the selected mouse and `/dev/uinput`;
+`--remove-udev-rule` removes it.
 `--install-service` installs and starts a systemd user service using the saved
 config; `--remove-service` stops, disables, and removes it. Services should run
 with `--no-interactive` so they fail instead of blocking on prompts.

@@ -27,6 +27,13 @@ pub struct Args {
     pub setup: bool,
 
     #[arg(
+        long = "pin-port",
+        action = ArgAction::SetTrue,
+        help = "Pin the saved config to the current USB port (writes `phys`); by default the mouse is matched by USB id only and works on any port"
+    )]
+    pub pin_port: bool,
+
+    #[arg(
         long,
         action = ArgAction::SetTrue,
         conflicts_with_all = [

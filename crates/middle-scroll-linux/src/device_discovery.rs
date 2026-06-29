@@ -39,6 +39,19 @@ pub struct MatchCriteria<'a> {
     pub phys: Option<&'a str>,
 }
 
+impl MatchCriteria<'_> {
+    /// Returns a copy of the criteria with `phys` cleared, so the match no
+    /// longer depends on the USB port topology. Used as a fallback for legacy
+    /// configs that pinned a port: the mouse is then found on any port.
+    #[must_use]
+    pub const fn without_phys(&self) -> Self {
+        Self {
+            phys: None,
+            ..*self
+        }
+    }
+}
+
 pub fn enumerate_mice() -> Vec<DeviceInfo> {
     let mut out = Vec::new();
     for (path, dev) in evdev::enumerate() {
@@ -199,4 +212,87 @@ pub fn print_listing<W: Write>(mut writer: W, devices: &[DeviceInfo]) -> std::io
         writeln!(writer)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn device(phys: Option<&str>) -> DeviceInfo {
+        DeviceInfo {
+            path: PathBuf::from("/dev/input/event0"),
+            name: "Test Mouse".to_owned(),
+            phys: phys.map(str::to_owned),
+            unique_name: None,
+            vendor_id: 0x046d,
+            product_id: 0xc539,
+            bus_type: 3,
+            keys: Vec::new(),
+            axes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn matches_requires_vendor_and_product() {
+        let dev = device(None);
+        let criteria = MatchCriteria {
+            vendor_id: 0x046d,
+            product_id: 0xc539,
+            name: None,
+            phys: None,
+        };
+        assert!(matches(&dev, &criteria));
+
+        let wrong_vendor = MatchCriteria {
+            vendor_id: 0x1234,
+            product_id: 0xc539,
+            name: None,
+            phys: None,
+        };
+        assert!(!matches(&dev, &wrong_vendor));
+    }
+
+    #[test]
+    fn matches_ignores_port_when_phys_is_none() {
+        // Mouse plugged into a port; criteria does not pin a port.
+        let dev = device(Some("usb-0000:00:14.0-2/input0"));
+        let criteria = MatchCriteria {
+            vendor_id: 0x046d,
+            product_id: 0xc539,
+            name: None,
+            phys: None,
+        };
+        assert!(matches(&dev, &criteria));
+    }
+
+    #[test]
+    fn matches_rejects_different_port_when_phys_pinned() {
+        let dev = device(Some("usb-0000:00:14.0-2/input0"));
+        let criteria = MatchCriteria {
+            vendor_id: 0x046d,
+            product_id: 0xc539,
+            name: None,
+            phys: Some("usb-0000:00:14.0-5/input2"),
+        };
+        assert!(!matches(&dev, &criteria));
+    }
+
+    #[test]
+    fn without_phys_clears_port_but_keeps_ids_and_name() {
+        let criteria = MatchCriteria {
+            vendor_id: 0x046d,
+            product_id: 0xc539,
+            name: Some("Test Mouse"),
+            phys: Some("usb-0000:00:14.0-5/input2"),
+        };
+        let relaxed = criteria.without_phys();
+        assert_eq!(relaxed.vendor_id, 0x046d);
+        assert_eq!(relaxed.product_id, 0xc539);
+        assert_eq!(relaxed.name, Some("Test Mouse"));
+        assert!(relaxed.phys.is_none());
+
+        // The relaxed criteria now matches a device on a different port.
+        let dev = device(Some("usb-0000:00:14.0-2/input0"));
+        assert!(matches(&dev, &relaxed));
+    }
 }
