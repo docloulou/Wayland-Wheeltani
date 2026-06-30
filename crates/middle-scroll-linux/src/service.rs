@@ -238,6 +238,7 @@ mod tests {
             no_interactive: false,
             verbose: 0,
             safety_timeout_seconds: None,
+            detect_foreground: false,
         };
 
         assert_eq!(requested_action(&args), Some(ServiceAction::Remove));

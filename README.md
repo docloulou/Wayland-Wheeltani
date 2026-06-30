@@ -301,6 +301,105 @@ before one hi-res event is emitted. The default `15` gives 8 smooth samples per
 detent (`120` units) and reduces tiny synthetic event spam in apps that stutter
 under high-rate scrolling.
 
+### Per-application filter (foreground)
+
+You can turn autoscroll on or off depending on the focused application, for
+example to keep the native middle-click in Firefox, Steam or Blender while
+keeping autoscroll everywhere else. This is **off by default**; an unconfigured
+daemon behaves exactly as before.
+
+Add an optional `[foreground]` table:
+
+```toml
+[foreground]
+enabled = true
+provider = "auto"          # auto | none | hyprland | sway | gnome | command
+mode = "denylist"          # denylist | allowlist
+unknown_policy = "enabled" # what to do when the app can't be determined
+deny_apps = ["firefox", "org.mozilla.firefox", "steam", "blender"]
+# allow_apps = ["code", "chromium"]   # used when mode = "allowlist"
+# match_title = false                  # also match the window title (off by default)
+```
+
+How it behaves:
+
+- When an app is **disabled**, the daemon does not run autoscroll for it; it
+  forwards the mouse events untouched, so the middle click and the wheel keep
+  working normally there. (Because the daemon grabs the device, it re-emits the
+  events on the virtual mouse instead of dropping them.)
+- The decision is taken once at middle-button press and held until release, so
+  changing focus mid-scroll never leaves a button stuck or a scroll half-done.
+- Matching is case-insensitive against `app_id`, `class` and `resource_class`
+  (a trailing `.desktop` is ignored). The title is matched only with
+  `match_title = true`.
+- `unknown_policy = "enabled"` (default) keeps autoscroll on when the focused
+  app is unknown, so a missing provider never breaks your setup.
+
+#### Finding an application's identifier
+
+Not sure what to put in `deny_apps` / `allow_apps`? Run the detector, focus the
+target window during the short countdown, and it prints the focused app's
+identity and the exact string to copy. It reuses the same provider selection as
+the daemon, so it works on every backend (and does not touch the mouse):
+
+```bash
+wayland-wheeltani --detect-foreground
+# Focus the window you want to identify; reading the focused app in 3s...
+# Detected foreground application (source: Gnome):
+#   app_id         : org.gnome.SystemMonitor
+#   class          : org.gnome.SystemMonitor
+#   ...
+# Use one of these identifiers (case-insensitive, `.desktop` ignored):
+#     org.gnome.systemmonitor
+```
+
+It honours the `provider` from your config (falling back to `auto` when the
+config has none), so detection matches what the running daemon will see.
+
+Providers and `provider = "auto"` detection order:
+
+1. **hyprland** - reads the Hyprland event socket. No helper needed.
+2. **sway** / i3 - reads the Sway/i3 IPC. No helper needed.
+3. **gnome** - needs the bundled GNOME Shell extension (see below).
+4. **command** - runs your own command (KWin, unsupported compositors, scripts).
+5. **none** - filter inert.
+
+The daemon must run inside your graphical session to see the focused window.
+The bundled systemd `--user` service already does; running it as root (plain
+`sudo`) will not have access to the compositor/session and the filter falls back
+to `unknown_policy`.
+
+#### GNOME setup
+
+GNOME (Wayland) has no portable focused-window API, so the `gnome` provider uses
+a small bundled GNOME Shell extension that publishes the focused window on the
+session bus; the daemon reads it through `gdbus`.
+
+```bash
+integrations/gnome/install.sh
+# On Wayland, log out and back in so GNOME Shell loads the extension, then:
+gnome-extensions enable wheeltani-foreground@docloulou.github.io
+```
+
+See [`integrations/gnome/README.md`](integrations/gnome/README.md) for details
+and verification. After it is enabled, `provider = "auto"` detects GNOME
+automatically, or set `provider = "gnome"` explicitly.
+
+#### KWin / other compositors
+
+Use `provider = "command"` with a script that prints the focused app id (plain
+text) or a JSON object `{"app_id":"...","class":"...","title":"...","pid":123}`:
+
+```toml
+[foreground]
+enabled = true
+provider = "command"
+mode = "denylist"
+deny_apps = ["krita"]
+command = ["my-focused-app-script"]
+command_refresh_ms = 500
+```
+
 ## Installation From Source
 
 ### Native Linux build
@@ -522,6 +621,23 @@ You are probably running with `--no-grab`. Re-enable grabbing for normal use.
 ### Short middle clicks become scrolls too easily
 
 Increase `deadzone_units` in the config.
+
+### The foreground filter does not disable/enable the right apps
+
+- Check which provider was selected: the daemon logs
+  `foreground provider selected: ...` at startup (run with `-v`). If you see
+  `foreground provider unsupported`, no provider matched your session.
+- The daemon must run inside your graphical session (the `systemd --user`
+  service does). A root daemon cannot see the compositor and will fall back to
+  `unknown_policy`.
+- App identity differs between Wayland and XWayland: a native Wayland app
+  exposes an `app_id` (e.g. `org.mozilla.firefox`) while an XWayland app exposes
+  a WM `class`/`resource_class` (e.g. `firefox`). List both spellings in
+  `deny_apps`/`allow_apps`. Run `wayland-wheeltani --detect-foreground` to print
+  the exact identifier of the focused window (or `-vv` to log decisions live).
+- On GNOME, make sure the bundled extension is installed and enabled (see the
+  GNOME setup section); verify with the `gdbus call ... GetFocused` command in
+  [`integrations/gnome/README.md`](integrations/gnome/README.md).
 
 ### Security notes
 

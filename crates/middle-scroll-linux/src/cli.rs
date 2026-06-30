@@ -205,6 +205,28 @@ pub struct Args {
 
     #[arg(long, value_name = "SECONDS")]
     pub safety_timeout_seconds: Option<u64>,
+
+    #[arg(
+        long = "detect-foreground",
+        action = ArgAction::SetTrue,
+        conflicts_with_all = [
+            "setup",
+            "install_service",
+            "install_udev_rule",
+            "remove_service",
+            "remove_udev_rule",
+            "start",
+            "stop",
+            "restart",
+            "list_devices",
+            "device",
+            "dry_run",
+            "no_grab",
+            "safety_timeout_seconds"
+        ],
+        help = "Print the focused window's identity (after a short delay to focus the target app) and the exact string to put in [foreground] deny_apps/allow_apps; works with every provider"
+    )]
+    pub detect_foreground: bool,
 }
 
 impl Args {
