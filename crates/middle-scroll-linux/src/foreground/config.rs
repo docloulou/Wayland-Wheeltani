@@ -24,6 +24,8 @@ pub enum ForegroundProviderKind {
     Sway,
     /// GNOME Shell via the bundled extension and its D-Bus service.
     Gnome,
+    /// KDE Plasma (`KWin`) via the `kdotool` helper.
+    Kde,
     /// An external command that prints the focused app.
     Command,
 }

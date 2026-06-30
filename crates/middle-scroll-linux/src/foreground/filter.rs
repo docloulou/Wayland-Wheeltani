@@ -34,10 +34,10 @@ pub enum ForegroundSourceKind {
     Hyprland,
     Sway,
     Gnome,
-    // Part of the documented source taxonomy; reserved for a future native KWin
-    // bridge and for providers that report an indeterminate origin.
-    #[allow(dead_code)]
-    KwinBridge,
+    /// KDE Plasma (`KWin`), resolved through the `kdotool` helper.
+    Kde,
+    // Part of the documented source taxonomy; reserved for providers that report
+    // an indeterminate origin.
     #[allow(dead_code)]
     Unknown,
 }

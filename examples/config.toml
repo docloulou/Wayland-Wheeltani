@@ -161,9 +161,9 @@ speed_detents_per_second = 32.0
 # [foreground]
 # enabled = false
 #
-# provider = "auto"          # auto | none | hyprland | sway | gnome | command
+# provider = "auto"          # auto | none | hyprland | sway | gnome | kde | command
 #   # "auto" tries, in order: hyprland, sway, gnome (needs the bundled GNOME
-#   # Shell extension), command, then none.
+#   # Shell extension), kde (needs the `kdotool` helper), command, then none.
 #
 # mode = "denylist"          # denylist | allowlist
 # unknown_policy = "enabled" # enabled | disabled  (used when the focused app
@@ -203,6 +203,17 @@ speed_detents_per_second = 32.0
 # provider = "gnome"
 # mode = "denylist"
 # deny_apps = ["firefox", "org.gnome.Nautilus"]
+
+# --- Example: KDE Plasma / KWin (needs the `kdotool` helper) ----------------
+# Install kdotool (https://github.com/jinliu/kdotool), e.g. `cargo install
+# kdotool` or your distro's package. "auto" also picks KDE when kdotool is
+# present. command_refresh_ms controls how often the active window is polled.
+# [foreground]
+# enabled = true
+# provider = "kde"
+# mode = "denylist"
+# deny_apps = ["firefox", "org.kde.dolphin"]
+# command_refresh_ms = 500
 
 # --- Example: external command (KWin, unsupported compositors, scripts) -----
 # The command prints the focused app id on stdout (plain text), or a JSON

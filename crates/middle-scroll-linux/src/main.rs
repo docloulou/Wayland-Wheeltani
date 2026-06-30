@@ -358,7 +358,7 @@ mod linux {
     /// user a moment to focus the target window, then print the focused app's
     /// identity and the exact string to drop into `deny_apps`/`allow_apps`. This
     /// shares the daemon's provider-selection logic, so it works with every
-    /// provider (auto/hyprland/sway/gnome/command). It never opens the mouse.
+    /// provider (auto/hyprland/sway/gnome/kde/command). It never opens the mouse.
     fn detect_foreground(cfg: &crate::foreground::ForegroundConfig) {
         use crate::foreground::config::ForegroundProviderKind;
         use crate::foreground::filter::ForegroundSnapshot;
@@ -406,8 +406,9 @@ mod linux {
             ForegroundSnapshot::Unsupported { reason } => {
                 println!("Foreground detection is not available ({reason}).");
                 println!(
-                    "Set `provider` under [foreground] (auto | hyprland | sway | gnome | command). \
-                     On GNOME, install the bundled Shell extension (see integrations/gnome/)."
+                    "Set `provider` under [foreground] (auto | hyprland | sway | gnome | kde | \
+                     command). On GNOME, install the bundled Shell extension (see \
+                     integrations/gnome/); on KDE Plasma, install `kdotool`."
                 );
             }
         }

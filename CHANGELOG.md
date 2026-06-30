@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-releases (`-beta.N`) are published as semver pre-releases, so a plain
 `cargo install wayland-wheeltani` keeps installing the latest **stable** release.
 
+## [1.3.0-beta.2] - 2026-06-30
+
+### Added
+
+- **KDE Plasma / KWin foreground provider** (`provider = "kde"`, also picked by
+  `provider = "auto"` on KDE). KWin (Wayland) exposes no readable focused-window
+  API, so this provider uses the [`kdotool`](https://github.com/jinliu/kdotool)
+  helper (which drives KWin's scripting API) and polls it on a background thread,
+  exactly like the `command` provider. Install `kdotool` (e.g. `cargo install
+  kdotool` or your distribution's package) to use it. See the
+  [KDE setup](https://github.com/docloulou/Wayland-Wheeltani/wiki/KDE-Setup) wiki
+  page.
+  - Auto-detection order is now hyprland → sway → gnome → **kde** → command →
+    none. `auto` selects KDE only when KWin is on the session bus **and**
+    `kdotool` is available, so it never shadows an already-working provider.
+  - `--detect-foreground` works with the new provider too (it reuses the same
+    provider selection) and reports the source as `Kde`.
+
+### Testing status
+
+- The new `kde` provider has **not** been verified by the author on a real
+  Plasma session — feedback is welcome. On GNOME keep using the `gnome` provider:
+  `kdotool` talks to KWin only and does nothing on GNOME.
+
+### Compatibility
+
+- Fully backward compatible: the KDE provider is opt-in and inert unless you
+  enable the foreground filter and select it (directly or via `auto` on KDE).
+
 ## [1.3.0-beta.1] - 2026-06-30
 
 ### Added
@@ -159,6 +188,7 @@ live unplug/replug — no more editing `/dev/input/eventXX` paths.
 
 - README troubleshooting and installation steps clarified (udev rule setup).
 
+[1.3.0-beta.2]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.0-beta.2
 [1.3.0-beta.1]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.0-beta.1
 [1.2.0]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.2.0
 [1.2.0-beta.2]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.2.0-beta.2

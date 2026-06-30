@@ -25,7 +25,7 @@ use crate::foreground::filter::{
     ForegroundApp, ForegroundProvider, ForegroundSnapshot, ForegroundSourceKind,
 };
 
-use super::{json_to_app, read_snapshot, store, SharedSnapshot};
+use super::{dbus_name_has_owner, json_to_app, read_snapshot, store, SharedSnapshot};
 
 const BUS_NAME: &str = "org.docloulou.WheeltaniForeground";
 const OBJECT_PATH: &str = "/org/docloulou/WheeltaniForeground";
@@ -54,7 +54,7 @@ pub fn is_available() -> bool {
         debug!("gnome: gdbus binary not found in PATH");
         return false;
     }
-    if !name_has_owner() {
+    if !dbus_name_has_owner(BUS_NAME) {
         debug!(
             bus = BUS_NAME,
             "gnome: D-Bus name has no owner (extension not enabled, or the session bus is \
@@ -77,23 +77,6 @@ fn gdbus_available() -> bool {
         .stderr(Stdio::null())
         .status()
         .is_ok()
-}
-
-fn name_has_owner() -> bool {
-    Command::new("gdbus")
-        .args([
-            "call",
-            "--session",
-            "--dest",
-            "org.freedesktop.DBus",
-            "--object-path",
-            "/org/freedesktop/DBus",
-            "--method",
-            "org.freedesktop.DBus.NameHasOwner",
-            BUS_NAME,
-        ])
-        .output()
-        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("true"))
 }
 
 impl GnomeProvider {

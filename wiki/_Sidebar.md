@@ -5,6 +5,7 @@
 - [Configuration](Configuration)
 - [Foreground filter](Foreground-Filter)
 - [GNOME setup](GNOME-Setup)
+- [KDE setup](KDE-Setup)
 - [Troubleshooting](Troubleshooting)
 - [Development](Development)
 

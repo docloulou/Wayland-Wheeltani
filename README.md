@@ -57,15 +57,17 @@ keeping autoscroll everywhere else — disabled by default:
 ```toml
 [foreground]
 enabled = true
-provider = "auto"          # auto | none | hyprland | sway | gnome | command
+provider = "auto"          # auto | none | hyprland | sway | gnome | kde | command
 mode = "denylist"
 deny_apps = ["firefox", "steam"]
 ```
 
 Run `wayland-wheeltani --detect-foreground` to print the exact identifier of any
-window. GNOME needs a small bundled Shell extension. See the
-**[Foreground filter](https://github.com/docloulou/Wayland-Wheeltani/wiki/Foreground-Filter)**
-and **[GNOME setup](https://github.com/docloulou/Wayland-Wheeltani/wiki/GNOME-Setup)**
+window. GNOME needs a small bundled Shell extension; KDE needs the `kdotool`
+helper. See the
+**[Foreground filter](https://github.com/docloulou/Wayland-Wheeltani/wiki/Foreground-Filter)**,
+**[GNOME setup](https://github.com/docloulou/Wayland-Wheeltani/wiki/GNOME-Setup)**
+and **[KDE setup](https://github.com/docloulou/Wayland-Wheeltani/wiki/KDE-Setup)**
 guides.
 
 ## Documentation
@@ -77,6 +79,7 @@ Full docs live in the **[GitHub wiki](https://github.com/docloulou/Wayland-Wheel
   (config file, CLI reference, stable device matching, scroll tuning)
 - [Foreground filter](https://github.com/docloulou/Wayland-Wheeltani/wiki/Foreground-Filter)
 - [GNOME setup](https://github.com/docloulou/Wayland-Wheeltani/wiki/GNOME-Setup)
+- [KDE setup](https://github.com/docloulou/Wayland-Wheeltani/wiki/KDE-Setup)
 - [Troubleshooting](https://github.com/docloulou/Wayland-Wheeltani/wiki/Troubleshooting)
 - [Development](https://github.com/docloulou/Wayland-Wheeltani/wiki/Development)
 

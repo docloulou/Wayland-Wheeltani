@@ -6,6 +6,7 @@
 mod command;
 mod gnome;
 mod hyprland;
+mod kde;
 mod none;
 mod sway;
 
@@ -20,6 +21,7 @@ use super::filter::{ForegroundApp, ForegroundProvider, ForegroundSnapshot, Foreg
 pub use command::CommandProvider;
 pub use gnome::GnomeProvider;
 pub use hyprland::HyprlandProvider;
+pub use kde::KdeProvider;
 pub use none::NoneProvider;
 pub use sway::SwayProvider;
 
@@ -40,6 +42,26 @@ pub(super) fn store(shared: &SharedSnapshot, snapshot: ForegroundSnapshot) {
         Ok(mut guard) => *guard = snapshot,
         Err(poisoned) => *poisoned.into_inner() = snapshot,
     }
+}
+
+/// True when `name` currently has an owner on the session bus. Shells out to
+/// `gdbus` (no D-Bus crate, per the dependency policy); a missing `gdbus` or a
+/// failed call is treated as "not owned". Shared by the GNOME and KDE providers.
+pub(super) fn dbus_name_has_owner(name: &str) -> bool {
+    std::process::Command::new("gdbus")
+        .args([
+            "call",
+            "--session",
+            "--dest",
+            "org.freedesktop.DBus",
+            "--object-path",
+            "/org/freedesktop/DBus",
+            "--method",
+            "org.freedesktop.DBus.NameHasOwner",
+            name,
+        ])
+        .output()
+        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("true"))
 }
 
 /// Builds a [`ForegroundApp`] from a JSON object shared by the `command` and
@@ -87,6 +109,10 @@ pub fn select_provider(cfg: &ForegroundConfig) -> Box<dyn ForegroundProvider> {
             info!("foreground provider selected: gnome");
             Box::new(GnomeProvider::start())
         }
+        ForegroundProviderKind::Kde => {
+            info!("foreground provider selected: kde");
+            Box::new(KdeProvider::start(cfg.command_refresh_ms))
+        }
         ForegroundProviderKind::Command => {
             info!("foreground provider selected: command");
             Box::new(CommandProvider::start(
@@ -110,6 +136,10 @@ fn auto_select(cfg: &ForegroundConfig) -> Box<dyn ForegroundProvider> {
     if gnome::is_available() {
         info!("foreground provider selected: gnome (auto)");
         return Box::new(GnomeProvider::start());
+    }
+    if kde::is_available() {
+        info!("foreground provider selected: kde (auto)");
+        return Box::new(KdeProvider::start(cfg.command_refresh_ms));
     }
     if !cfg.command.is_empty() {
         info!("foreground provider selected: command (auto)");

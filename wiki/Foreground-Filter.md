@@ -12,7 +12,7 @@ Add an optional `[foreground]` table to your config:
 ```toml
 [foreground]
 enabled = true
-provider = "auto"          # auto | none | hyprland | sway | gnome | command
+provider = "auto"          # auto | none | hyprland | sway | gnome | kde | command
 mode = "denylist"          # denylist | allowlist
 unknown_policy = "enabled" # what to do when the app can't be determined
 deny_apps = ["firefox", "org.mozilla.firefox", "steam", "blender"]
@@ -46,16 +46,18 @@ Not sure what to put in the lists? Use **[`--detect-foreground`](#finding-an-app
 2. **sway** / i3 — reads the Sway/i3 IPC. No helper needed.
 3. **gnome** — needs the bundled GNOME Shell extension (see
    **[GNOME setup](GNOME-Setup)**).
-4. **command** — runs your own command (KWin, unsupported compositors, scripts).
-5. **none** — filter inert.
+4. **kde** — KDE Plasma / KWin, via the `kdotool` helper (see
+   **[KDE setup](KDE-Setup)**).
+5. **command** — runs your own command (other compositors, scripts).
+6. **none** — filter inert.
 
 Detection relies on the **session bus / compositor sockets**, not on desktop
 environment variables, so it works from a `systemd --user` service even when
 `XDG_CURRENT_DESKTOP` is not exported.
 
 > **Tested providers:** so far only **gnome** has been verified by the author.
-> The `hyprland`, `sway`/i3 and `command` providers are implemented but not yet
-> confirmed on real sessions — feedback is welcome. The
+> The `hyprland`, `sway`/i3, `kde` and `command` providers are implemented but
+> not yet confirmed on real sessions — feedback is welcome. The
 > [Troubleshooting](Troubleshooting#the-foreground-filter-does-not-disableenable-the-right-apps)
 > page lists the commands to debug them.
 
@@ -95,10 +97,28 @@ GNOME (Wayland) has no portable focused-window API, so the `gnome` provider uses
 a small bundled GNOME Shell extension that publishes the focused window on the
 session bus; the daemon reads it through `gdbus`. See **[GNOME setup](GNOME-Setup)**.
 
-## KWin / other compositors (`command` provider)
+## KDE Plasma / KWin
 
-Use `provider = "command"` with a script that prints the focused app id (plain
-text) or a JSON object `{"app_id":"...","class":"...","title":"...","pid":123}`:
+KWin (Wayland) also exposes no readable focused-window API, so the `kde` provider
+uses the [`kdotool`](https://github.com/jinliu/kdotool) helper (which drives
+KWin's scripting API under the hood). Install `kdotool`, then:
+
+```toml
+[foreground]
+enabled = true
+provider = "kde"           # or "auto" — it detects KDE when kdotool is present
+mode = "denylist"
+deny_apps = ["firefox", "org.kde.dolphin"]
+command_refresh_ms = 500   # how often the active window is polled
+```
+
+See **[KDE setup](KDE-Setup)** for installing `kdotool` and verifying it.
+
+## Other compositors (`command` provider)
+
+For any other compositor (or a custom source), use `provider = "command"` with a
+script that prints the focused app id (plain text) or a JSON object
+`{"app_id":"...","class":"...","title":"...","pid":123}`:
 
 ```toml
 [foreground]

@@ -113,6 +113,10 @@ Increase `deadzone_units` in the config.
 - **On GNOME**, make sure the bundled extension is installed and enabled, and
   verify it with the `gdbus call ... GetFocused` command. See
   **[GNOME setup](GNOME-Setup)**.
+- **On KDE Plasma**, install `kdotool` and verify it with
+  `kdotool getactivewindow getwindowclassname`. If `provider = "auto"` does not
+  pick KDE, set `provider = "kde"` explicitly (auto-detection needs `gdbus` to
+  see KWin on the bus). See **[KDE setup](KDE-Setup)**.
 - Run with `-vv` to log each decision (`foreground decision ...`).
 
 ## Security notes
