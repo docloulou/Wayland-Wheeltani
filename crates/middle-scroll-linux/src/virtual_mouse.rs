@@ -80,6 +80,26 @@ impl VirtualMouse {
         self.device.emit(&[down])?;
         self.device.emit(&[up])
     }
+
+    /// Emits a key-up for every supported button. Used when the physical mouse
+    /// disconnects mid-gesture so a forwarded button press cannot stay stuck on
+    /// the virtual device. Releasing a button that was never pressed is a no-op
+    /// for the compositor.
+    pub fn release_all_buttons(&mut self) -> io::Result<()> {
+        let ups: Vec<InputEvent> = [
+            KeyCode::BTN_LEFT,
+            KeyCode::BTN_RIGHT,
+            KeyCode::BTN_MIDDLE,
+            KeyCode::BTN_SIDE,
+            KeyCode::BTN_EXTRA,
+            KeyCode::BTN_FORWARD,
+            KeyCode::BTN_BACK,
+        ]
+        .into_iter()
+        .map(|code| key_event(code, false))
+        .collect();
+        self.device.emit(&ups)
+    }
 }
 
 fn encode_action(action: &CoreAction, out: &mut Vec<InputEvent>) {

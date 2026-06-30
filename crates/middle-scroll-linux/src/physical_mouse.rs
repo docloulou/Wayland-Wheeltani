@@ -71,6 +71,14 @@ impl PhysicalMouse {
     pub fn name(&self) -> &str {
         self.device.name().unwrap_or("(unknown)")
     }
+
+    pub fn vendor_id(&self) -> u16 {
+        self.device.input_id().vendor()
+    }
+
+    pub fn product_id(&self) -> u16 {
+        self.device.input_id().product()
+    }
 }
 
 impl Drop for PhysicalMouse {
