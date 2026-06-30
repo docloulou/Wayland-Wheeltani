@@ -148,6 +148,7 @@ Options:
   --device <PATH>                 evdev node, e.g. /dev/input/event12
   --config <FILE>                 override config path
   --setup                         choose a mouse interactively and save config
+  --pin-port                      with --setup, also pin the mouse to its current USB port
   --install-udev-rule             install udev access rule for selected mouse and /dev/uinput
   --remove-udev-rule              remove the installed Wayland-Wheeltani udev rule
   --install-service               install, enable, and start the systemd user service
@@ -177,12 +178,12 @@ CLI flags > config file > built-in defaults
 
 See [`examples/config.toml`](examples/config.toml) for every tunable option.
 
-### Stable device selection across reboots
+### Stable device selection across reboots and USB ports
 
 The kernel renumbers `/dev/input/eventXX` every boot, so a config like
 `device = "/dev/input/event12"` regularly breaks. The recommended fix is to
 let the daemon match the mouse by its **USB vendor and product ids**, which are
-stable for a given device.
+stable for a given device regardless of which port it is plugged into.
 
 Run `wayland-wheeltani --setup` and it will write a `[device_match]` block
 automatically:
@@ -192,13 +193,24 @@ automatically:
 vendor_id = "046d"
 product_id = "c539"
 # name = "Logitech USB Receiver"     # optional; disambiguates duplicates
-# phys = "usb-0000:00:14.0-5/input2" # optional; pin to a USB port
+# phys = "usb-0000:00:14.0-5/input2" # optional; pin to a specific USB port
 ```
+
+By default the match is **port-independent**: `phys` is not written, so moving
+the mouse to a different USB port keeps working with no re-setup. This is the
+recommended behavior for dotfiles maintainers who share one config across
+machines. If you specifically want to pin the mouse to the exact USB port it is
+on now (for example to disambiguate two identical mice), run
+`wayland-wheeltani --setup --pin-port`, which adds the `phys` line.
 
 At startup the daemon enumerates `/dev/input/event*`, finds the first one that
 matches and uses it. If the mouse is not plugged in yet (e.g. systemd started
 the service before USB enumeration finished), it waits up to ten seconds for
 the device to appear before giving up.
+
+Configs created by older versions that pinned a `phys` line keep working too:
+if the mouse is no longer on the pinned port, the daemon logs a warning and
+falls back to matching by USB id, so you do not need to re-run `--setup`.
 
 The legacy `device = "/dev/input/event..."` form still works for one-shot
 overrides (or when running with `--device <PATH>`), but new configs should
@@ -211,6 +223,49 @@ wayland-wheeltani --list-devices
 ```
 
 The output line `usb-id: vvvv:pppp` gives you the values to use.
+
+### Migrating an existing install to port-independent matching
+
+If you set up Wayland-Wheeltani with an older version, your config may pin the
+mouse to a specific USB port. Check it:
+
+```bash
+grep phys ~/.config/wayland-wheeltani/config.toml
+```
+
+If a `phys = "usb-..."` line is present under `[device_match]`, the new version
+still works on any port automatically: when the mouse is not on the pinned
+port, the daemon logs a warning and falls back to matching by USB id. You do
+not strictly need to do anything.
+
+To migrate cleanly and drop the pinned port, re-run setup without `--pin-port`,
+then restart the service so it reloads the config:
+
+```bash
+# Re-run setup (omitting --pin-port removes the `phys` line)
+wayland-wheeltani --setup
+# If you run the systemd user service, reload it
+wayland-wheeltani --restart
+```
+
+The udev rule does not need to change: it has always matched by USB id only, so
+it is already port-independent. You only need to reinstall it if you switch to a
+different physical mouse (different USB vendor/product id):
+
+```bash
+sudo "$(command -v wayland-wheeltani)" --setup --install-udev-rule
+sudo udevadm control --reload-rules
+```
+
+If you specifically want to keep pinning the mouse to its current port (for
+example to disambiguate two identical mice), re-run with
+`wayland-wheeltani --setup --pin-port` instead.
+
+Verify the resolved device after restarting:
+
+```bash
+journalctl --user -u wayland-wheeltani -f
+```
 
 ### Useful config options
 

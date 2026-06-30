@@ -44,7 +44,10 @@ pub struct DeviceMatchConfig {
 }
 
 impl DeviceMatchConfig {
-    pub fn from_device(device: &DeviceInfo) -> Self {
+    /// Builds a stable match block from a probed device. `phys` (the USB port
+    /// topology) is only written when `pin_port` is set, so by default the
+    /// mouse is matched by USB id and keeps working on any port.
+    pub fn from_device(device: &DeviceInfo, pin_port: bool) -> Self {
         Self {
             vendor_id: device.vendor_hex(),
             product_id: device.product_hex(),
@@ -53,7 +56,7 @@ impl DeviceMatchConfig {
             } else {
                 Some(device.name.clone())
             },
-            phys: device.phys.clone(),
+            phys: if pin_port { device.phys.clone() } else { None },
         }
     }
 
@@ -359,7 +362,7 @@ pub fn save_device_to_config(device: &Path, args: &Args) -> Result<PathBuf, Daem
 
     let probed = crate::device_discovery::probe(device);
     if let Some(info) = probed.as_ref() {
-        file_cfg.device_match = Some(DeviceMatchConfig::from_device(info));
+        file_cfg.device_match = Some(DeviceMatchConfig::from_device(info, args.pin_port));
         file_cfg.device = None;
     } else {
         warn!(
@@ -528,6 +531,7 @@ mod tests {
             device: None,
             config: Some(path),
             setup: false,
+            pin_port: false,
             install_service: false,
             remove_service: false,
             install_udev_rule: false,
@@ -558,6 +562,39 @@ mod tests {
     /// always return `None` and `save_device_to_config` will fall back to the
     /// legacy `device = "..."` form (which is what the next two tests assert).
     const BOGUS_DEVICE: &str = "/dev/input/event-wheeltani-test-bogus";
+
+    fn synthetic_device() -> DeviceInfo {
+        DeviceInfo {
+            path: PathBuf::from("/dev/input/event99"),
+            name: "Test Mouse".to_owned(),
+            phys: Some("usb-0000:00:14.0-5/input2".to_owned()),
+            unique_name: None,
+            vendor_id: 0x046d,
+            product_id: 0xc539,
+            bus_type: 3,
+            keys: Vec::new(),
+            axes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn from_device_omits_phys_by_default() {
+        let cfg = DeviceMatchConfig::from_device(&synthetic_device(), false);
+        assert_eq!(cfg.vendor_id, "046d");
+        assert_eq!(cfg.product_id, "c539");
+        assert_eq!(cfg.name.as_deref(), Some("Test Mouse"));
+        assert!(
+            cfg.phys.is_none(),
+            "phys must not be written without --pin-port: {:?}",
+            cfg.phys
+        );
+    }
+
+    #[test]
+    fn from_device_writes_phys_when_pinned() {
+        let cfg = DeviceMatchConfig::from_device(&synthetic_device(), true);
+        assert_eq!(cfg.phys.as_deref(), Some("usb-0000:00:14.0-5/input2"));
+    }
 
     #[test]
     fn save_device_to_config_writes_minimal_toml() {

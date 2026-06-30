@@ -49,7 +49,7 @@ mod linux {
 
     use crate::cli::Args;
     use crate::config_loader::{self, ParsedDeviceMatch, ResolvedConfig};
-    use crate::device_discovery::{self, DeviceInfo};
+    use crate::device_discovery::{self, DeviceInfo, MatchCriteria};
     use crate::errors::DaemonError;
     use crate::event_router::{self, RoutedEvent};
     use crate::indicator::{Indicator, NoopIndicator};
@@ -62,8 +62,70 @@ mod linux {
     /// Total time spent waiting for a `device_match` to appear. Useful when
     /// the daemon is launched by systemd before USB enumeration completes.
     const DEVICE_MATCH_RETRY_TIMEOUT: Duration = Duration::from_secs(10);
-    /// Polling interval while waiting for a `device_match`.
+    /// Polling interval while waiting for a `device_match`, both at startup and
+    /// while waiting for the mouse to be plugged back in at runtime.
     const DEVICE_MATCH_RETRY_INTERVAL: Duration = Duration::from_millis(500);
+
+    /// Why the inner event loop returned. The supervisor in `run_daemon` uses
+    /// this to decide between shutting down and re-acquiring the device.
+    enum LoopOutcome {
+        /// A shutdown signal or the safety timeout fired; stop the daemon.
+        Shutdown,
+        /// The physical device went away (unplugged). Try to re-open it,
+        /// possibly on a different `/dev/input/eventXX` node or USB port.
+        DeviceLost,
+    }
+
+    /// Owned criteria used to re-find the mouse after it is unplugged and
+    /// plugged back in, possibly on a different USB port. Prefers the configured
+    /// `[device_match]`; otherwise it is derived from the live device so that
+    /// `--device`/legacy `device =` configs also reconnect across ports.
+    struct ReconnectMatch {
+        vendor_id: u16,
+        product_id: u16,
+        name: Option<String>,
+        phys: Option<String>,
+    }
+
+    impl ReconnectMatch {
+        /// Builds the reconnect criteria from a configured `[device_match]`, if
+        /// any. Returns `None` for legacy `device =`/`--device` configs that have
+        /// no stable USB id to match on.
+        fn from_config(cfg: &ResolvedConfig) -> Option<Self> {
+            cfg.device_match.as_ref().map(|m| Self {
+                vendor_id: m.vendor_id,
+                product_id: m.product_id,
+                name: m.name.clone(),
+                phys: m.phys.clone(),
+            })
+        }
+
+        /// Derives reconnect criteria from a live device. Used so that
+        /// `--device`/legacy configs also reconnect across ports: once the mouse
+        /// has been opened, its USB id is known. `phys` is intentionally left
+        /// unset so the match does not depend on the current port.
+        fn from_device(physical: &PhysicalMouse) -> Self {
+            Self {
+                vendor_id: physical.vendor_id(),
+                product_id: physical.product_id(),
+                name: Some(physical.name().to_owned()),
+                phys: None,
+            }
+        }
+
+        fn criteria(&self) -> MatchCriteria<'_> {
+            MatchCriteria {
+                vendor_id: self.vendor_id,
+                product_id: self.product_id,
+                name: self.name.as_deref(),
+                phys: self.phys.as_deref(),
+            }
+        }
+
+        fn human_id(&self) -> String {
+            format!("{:04x}:{:04x}", self.vendor_id, self.product_id)
+        }
+    }
 
     pub fn run() -> anyhow::Result<()> {
         let args = Args::parsed();
@@ -137,7 +199,10 @@ mod linux {
         }
 
         if let Some(match_cfg) = &resolved.device_match {
-            return resolve_device_match(match_cfg);
+            // A service (`--no-interactive`) may be started before the mouse is
+            // plugged in, so wait indefinitely there instead of crash-looping.
+            // Interactive runs keep the short timeout for snappy CLI feedback.
+            return resolve_device_match(match_cfg, args.no_interactive);
         }
 
         if let Some(device) = resolved.device.clone() {
@@ -151,44 +216,83 @@ mod linux {
         Err(DaemonError::NoDevice.into())
     }
 
-    fn resolve_device_match(match_cfg: &ParsedDeviceMatch) -> anyhow::Result<PathBuf> {
+    /// Resolves a `[device_match]` to a `/dev/input/eventXX` node, waiting for
+    /// the mouse to be plugged in. When `wait_forever` is set (service mode) it
+    /// never gives up; otherwise it errors after `DEVICE_MATCH_RETRY_TIMEOUT` so
+    /// interactive invocations fail fast.
+    fn resolve_device_match(
+        match_cfg: &ParsedDeviceMatch,
+        wait_forever: bool,
+    ) -> anyhow::Result<PathBuf> {
         let id = match_cfg.human_id();
         let criteria = match_cfg.as_criteria();
 
-        if let Some(found) = device_discovery::find_match(&criteria) {
+        if let Some(found) = try_match(&criteria, &id) {
             info!(
                 usb_id = %id,
-                event = %found.path.display(),
+                event = %found.display(),
                 "resolved device_match"
             );
-            return Ok(found.path);
+            return Ok(found);
         }
 
-        warn!(
-            usb_id = %id,
-            "no input device currently matches; waiting up to {:?} for it to appear",
-            DEVICE_MATCH_RETRY_TIMEOUT
-        );
+        if wait_forever {
+            warn!(
+                usb_id = %id,
+                "no input device currently matches; waiting for the mouse to be plugged in (any port works)"
+            );
+        } else {
+            warn!(
+                usb_id = %id,
+                "no input device currently matches; waiting up to {:?} for it to appear",
+                DEVICE_MATCH_RETRY_TIMEOUT
+            );
+        }
 
         let started = Instant::now();
-        while started.elapsed() < DEVICE_MATCH_RETRY_TIMEOUT {
+        loop {
             std::thread::sleep(DEVICE_MATCH_RETRY_INTERVAL);
-            if let Some(found) = device_discovery::find_match(&criteria) {
+            if let Some(found) = try_match(&criteria, &id) {
                 info!(
                     usb_id = %id,
-                    event = %found.path.display(),
+                    event = %found.display(),
                     elapsed = ?started.elapsed(),
                     "resolved device_match after retry"
                 );
-                return Ok(found.path);
+                return Ok(found);
+            }
+            if !wait_forever && started.elapsed() >= DEVICE_MATCH_RETRY_TIMEOUT {
+                return Err(DaemonError::DeviceMatchNotFound {
+                    vendor_id: match_cfg.vendor_id,
+                    product_id: match_cfg.product_id,
+                }
+                .into());
+            }
+        }
+    }
+
+    /// Tries a strict match first (honouring `phys` when configured), then a
+    /// relaxed match that ignores `phys`. The relaxed pass lets legacy configs
+    /// that pinned a USB port keep working when the mouse is moved to another
+    /// port: the device is still found by USB id, just on a different node.
+    fn try_match(criteria: &MatchCriteria<'_>, id: &str) -> Option<PathBuf> {
+        if let Some(found) = device_discovery::find_match(criteria) {
+            return Some(found.path);
+        }
+
+        if criteria.phys.is_some() {
+            if let Some(found) = device_discovery::find_match(&criteria.without_phys()) {
+                warn!(
+                    usb_id = %id,
+                    event = %found.path.display(),
+                    found_phys = ?found.phys,
+                    "mouse found on a different USB port than the one pinned in config; matching by USB id instead (re-run `wayland-wheeltani --setup` to clear the pinned port)"
+                );
+                return Some(found.path);
             }
         }
 
-        Err(DaemonError::DeviceMatchNotFound {
-            vendor_id: match_cfg.vendor_id,
-            product_id: match_cfg.product_id,
-        }
-        .into())
+        None
     }
 
     fn select_device(args: &Args) -> anyhow::Result<PathBuf> {
@@ -249,9 +353,8 @@ mod linux {
         let shutdown = install_signal_handler()?;
         let mut indicator = NoopIndicator;
 
-        let mut physical = PhysicalMouse::open(device_path)?;
-        info!(name = physical.name(), "opened physical device");
-
+        // The virtual mouse is created once and kept alive across physical
+        // reconnections, so the compositor never sees it disappear.
         let mut virtual_mouse = if cfg.dry_run {
             None
         } else {
@@ -260,14 +363,9 @@ mod linux {
             Some(v)
         };
 
-        if cfg.grab && !cfg.dry_run {
-            physical
-                .grab()
-                .with_context(|| format!("failed to grab device {}", device_path.display()))?;
-            info!("grabbed physical device exclusively");
-        } else if cfg.grab && cfg.dry_run {
+        if cfg.grab && cfg.dry_run {
             warn!("--dry-run skips grab to avoid silently capturing the mouse");
-        } else {
+        } else if !cfg.grab {
             warn!("running without grab; the compositor will see both physical and virtual events");
         }
 
@@ -276,27 +374,113 @@ mod linux {
         let tick_period = Duration::from_micros(1_000_000 / u64::from(cfg.core.tick_hz));
 
         let mut engine = Engine::new(cfg.core.clone());
-        let mut last_tick = Instant::now();
         let mut last_state = engine.state();
 
-        let result = run_loop(
-            &mut physical,
-            virtual_mouse.as_mut(),
-            &mut engine,
-            &mut indicator,
-            &shutdown,
-            tick_period,
-            safety_timeout,
-            started,
-            cfg.dry_run,
-            &mut last_tick,
-            &mut last_state,
-        );
+        // Initial open is fatal: `run()` already waited for a `device_match` to
+        // appear, so a failure here is a genuine setup problem.
+        let mut physical = open_and_grab(device_path, cfg)?;
+        info!(name = physical.name(), "opened physical device");
+
+        let reconnect =
+            ReconnectMatch::from_config(cfg).unwrap_or_else(|| ReconnectMatch::from_device(&physical));
+
+        let result = loop {
+            let mut last_tick = Instant::now();
+            let outcome = run_loop(
+                &mut physical,
+                virtual_mouse.as_mut(),
+                &mut engine,
+                &mut indicator,
+                &shutdown,
+                tick_period,
+                safety_timeout,
+                started,
+                cfg.dry_run,
+                &mut last_tick,
+                &mut last_state,
+            );
+
+            match outcome {
+                Ok(LoopOutcome::Shutdown) => break Ok(()),
+                Err(err) => break Err(err),
+                Ok(LoopOutcome::DeviceLost) => {
+                    warn!("physical device disconnected; waiting to reconnect");
+                    drop(physical);
+
+                    // Clear in-flight gesture state so the gap cannot leave a
+                    // scroll detent pending or a forwarded button stuck down.
+                    if let Some(v) = virtual_mouse.as_mut() {
+                        if let Err(err) = v.release_all_buttons() {
+                            warn!(?err, "failed to release virtual buttons after disconnect");
+                        }
+                    }
+                    engine = Engine::new(cfg.core.clone());
+                    last_state = engine.state();
+
+                    match wait_for_device(&reconnect, cfg, &shutdown) {
+                        Some(p) => {
+                            physical = p;
+                            info!(name = physical.name(), "reconnected physical device");
+                        }
+                        None => break Ok(()),
+                    }
+                }
+            }
+        };
 
         info!("shutting down");
-        physical.ungrab();
-
         result
+    }
+
+    /// Opens the device at `path` and grabs it exclusively when configured.
+    /// Used both for the initial open and for every runtime reconnection.
+    fn open_and_grab(path: &Path, cfg: &ResolvedConfig) -> anyhow::Result<PhysicalMouse> {
+        let mut physical = PhysicalMouse::open(path)?;
+        if cfg.grab && !cfg.dry_run {
+            physical
+                .grab()
+                .with_context(|| format!("failed to grab device {}", path.display()))?;
+            info!("grabbed physical device exclusively");
+        }
+        Ok(physical)
+    }
+
+    /// Blocks until the mouse described by `reconnect` is plugged back in and can
+    /// be opened/grabbed, then returns it ready to use. Returns `None` if a
+    /// shutdown is requested while waiting. Matching is by USB id, so the mouse
+    /// is found again even on a different `/dev/input/eventXX` node or USB port.
+    fn wait_for_device(
+        reconnect: &ReconnectMatch,
+        cfg: &ResolvedConfig,
+        shutdown: &Arc<AtomicBool>,
+    ) -> Option<PhysicalMouse> {
+        let id = reconnect.human_id();
+        info!(
+            usb_id = %id,
+            "waiting for the mouse to be plugged back in (any port works)"
+        );
+
+        loop {
+            if shutdown.load(Ordering::SeqCst) {
+                return None;
+            }
+
+            if let Some(path) = try_match(&reconnect.criteria(), &id) {
+                match open_and_grab(&path, cfg) {
+                    Ok(physical) => {
+                        info!(usb_id = %id, event = %path.display(), "mouse reconnected");
+                        return Some(physical);
+                    }
+                    Err(err) => {
+                        // The node reappeared but is not usable yet (udev still
+                        // applying permissions, or a previous grab not released).
+                        debug!(?err, event = %path.display(), "device not ready yet; retrying");
+                    }
+                }
+            }
+
+            std::thread::sleep(DEVICE_MATCH_RETRY_INTERVAL);
+        }
     }
 
     fn install_signal_handler() -> anyhow::Result<Arc<AtomicBool>> {
@@ -322,16 +506,16 @@ mod linux {
         dry_run: bool,
         last_tick: &mut Instant,
         last_state: &mut EngineState,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<LoopOutcome> {
         loop {
             if shutdown.load(Ordering::SeqCst) {
                 info!("shutdown signal received");
-                break;
+                return Ok(LoopOutcome::Shutdown);
             }
             if let Some(limit) = safety_timeout {
                 if started.elapsed() >= limit {
                     warn!(?limit, "safety timeout reached, exiting");
-                    break;
+                    return Ok(LoopOutcome::Shutdown);
                 }
             }
 
@@ -339,14 +523,14 @@ mod linux {
             let until_next_tick = tick_period.saturating_sub(now.duration_since(*last_tick));
             let timeout_ms = poll_timeout_millis(until_next_tick);
 
-            let readable = {
+            // `revents` is copied out so the borrow on `physical` ends before we
+            // touch it mutably below.
+            let revents = {
                 let fd = physical.as_fd();
                 let mut fds = [PollFd::new(fd, PollFlags::POLLIN)];
                 match nix::poll::poll(&mut fds, PollTimeout::from(timeout_ms)) {
-                    Ok(0) => false,
-                    Ok(_) => fds[0]
-                        .revents()
-                        .is_some_and(|r| r.contains(PollFlags::POLLIN)),
+                    Ok(0) => None,
+                    Ok(_) => fds[0].revents(),
                     Err(nix::errno::Errno::EINTR) => continue,
                     Err(err) => {
                         error!(?err, "poll failed");
@@ -355,15 +539,27 @@ mod linux {
                 }
             };
 
-            if readable {
-                process_pending_events(
-                    physical,
-                    virtual_mouse.as_deref_mut(),
-                    engine,
-                    indicator,
-                    dry_run,
-                    last_state,
-                )?;
+            if let Some(revents) = revents {
+                // A hangup/error on the fd means the mouse was unplugged.
+                if revents
+                    .intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL)
+                {
+                    warn!(?revents, "physical device hung up; treating as disconnect");
+                    return Ok(LoopOutcome::DeviceLost);
+                }
+
+                if revents.contains(PollFlags::POLLIN)
+                    && !process_pending_events(
+                        physical,
+                        virtual_mouse.as_deref_mut(),
+                        engine,
+                        indicator,
+                        dry_run,
+                        last_state,
+                    )?
+                {
+                    return Ok(LoopOutcome::DeviceLost);
+                }
             }
 
             let now = Instant::now();
@@ -382,10 +578,11 @@ mod linux {
                 )?;
             }
         }
-
-        Ok(())
     }
 
+    /// Drains and dispatches pending input events. Returns `Ok(false)` when the
+    /// read fails because the device disconnected, so the caller can switch to
+    /// reconnecting instead of aborting the whole daemon.
     fn process_pending_events(
         physical: &mut PhysicalMouse,
         mut virtual_mouse: Option<&mut VirtualMouse>,
@@ -393,15 +590,13 @@ mod linux {
         indicator: &mut dyn Indicator,
         dry_run: bool,
         last_state: &mut EngineState,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let events: Vec<evdev::InputEvent> = match physical.fetch_events() {
             Ok(iter) => iter.collect(),
+            Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(true),
             Err(err) => {
-                error!(
-                    ?err,
-                    "fetch_events failed; device may have been disconnected"
-                );
-                return Err(err.into());
+                warn!(?err, "fetch_events failed; treating device as disconnected");
+                return Ok(false);
             }
         };
 
@@ -432,7 +627,7 @@ mod linux {
                 RoutedEvent::Ignore => {}
             }
         }
-        Ok(())
+        Ok(true)
     }
 
     #[allow(clippy::unnecessary_wraps)]
@@ -516,6 +711,17 @@ mod linux {
     mod tests {
         use super::*;
 
+        fn resolved_with_match(device_match: Option<ParsedDeviceMatch>) -> ResolvedConfig {
+            ResolvedConfig {
+                core: middle_scroll_core::CoreConfig::default(),
+                device: None,
+                device_match,
+                grab: true,
+                dry_run: false,
+                safety_timeout_seconds: None,
+            }
+        }
+
         #[test]
         fn poll_timeout_rounds_sub_millisecond_deadlines_up() {
             assert_eq!(poll_timeout_millis(Duration::ZERO), 0);
@@ -527,6 +733,48 @@ mod linux {
         #[test]
         fn poll_timeout_saturates_at_poll_limit() {
             assert_eq!(poll_timeout_millis(Duration::from_secs(120)), u16::MAX);
+        }
+
+        #[test]
+        fn reconnect_match_from_config_copies_device_match() {
+            let cfg = resolved_with_match(Some(ParsedDeviceMatch {
+                vendor_id: 0x046d,
+                product_id: 0xc539,
+                name: Some("Logitech USB Receiver".to_owned()),
+                phys: Some("usb-0000:00:14.0-2/input0".to_owned()),
+            }));
+
+            let rm = ReconnectMatch::from_config(&cfg).expect("device_match present");
+            assert_eq!(rm.vendor_id, 0x046d);
+            assert_eq!(rm.product_id, 0xc539);
+            assert_eq!(rm.human_id(), "046d:c539");
+
+            let criteria = rm.criteria();
+            assert_eq!(criteria.vendor_id, 0x046d);
+            assert_eq!(criteria.product_id, 0xc539);
+            assert_eq!(criteria.name, Some("Logitech USB Receiver"));
+            assert_eq!(criteria.phys, Some("usb-0000:00:14.0-2/input0"));
+        }
+
+        #[test]
+        fn reconnect_match_from_config_is_none_for_legacy_path() {
+            let cfg = resolved_with_match(None);
+            assert!(ReconnectMatch::from_config(&cfg).is_none());
+        }
+
+        #[test]
+        fn reconnect_match_human_id_is_zero_padded() {
+            let cfg = resolved_with_match(Some(ParsedDeviceMatch {
+                vendor_id: 0x1,
+                product_id: 0x2bc,
+                name: None,
+                phys: None,
+            }));
+
+            let rm = ReconnectMatch::from_config(&cfg).expect("device_match present");
+            assert_eq!(rm.human_id(), "0001:02bc");
+            assert_eq!(rm.criteria().name, None);
+            assert_eq!(rm.criteria().phys, None);
         }
     }
 }

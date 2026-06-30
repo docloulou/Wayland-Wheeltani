@@ -224,6 +224,7 @@ mod tests {
             device: None,
             config: None,
             setup: false,
+            pin_port: false,
             install_service: false,
             remove_service: true,
             install_udev_rule: false,
