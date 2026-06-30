@@ -75,6 +75,43 @@ Copy the printed identifier into `deny_apps` / `allow_apps`.
 - `command_refresh_ms` controls the poll interval (default 500 ms). Each poll
   asks `kdotool` once; the decision itself is still taken at middle-button press
   using the latest polled value.
-- If you would rather not install `kdotool`, you can instead use the generic
-  [`command`](Foreground-Filter#other-compositors-command-provider) provider
-  with your own script.
+
+## Alternative: without kdotool (a KWin script)
+
+If you would rather not install `kdotool`, use the generic `command` provider
+with the bundled example script
+[`integrations/kde/wheeltani-kwin-active-window.sh`](https://github.com/docloulou/Wayland-Wheeltani/blob/main/integrations/kde/wheeltani-kwin-active-window.sh).
+It loads a tiny KWin script over D-Bus (the same trick `kdotool` uses) and prints
+the focused window's resource class:
+
+```toml
+[foreground]
+enabled = true
+provider = "command"
+mode = "denylist"
+deny_apps = ["org.kde.dolphin", "firefox"]
+command = ["/full/path/to/integrations/kde/wheeltani-kwin-active-window.sh"]
+command_refresh_ms = 500
+```
+
+Test it directly first (focus another window, then run it):
+
+```bash
+integrations/kde/wheeltani-kwin-active-window.sh
+# -> org.kde.dolphin   (or firefox for an X/XWayland app)
+```
+
+What the script does, step by step:
+
+1. writes a one-shot KWin script that `print()`s
+   `workspace.activeWindow.resourceClass`;
+2. loads + runs + unloads it through the `org.kde.kwin.Scripting` D-Bus interface
+   (via `qdbus6` / `qdbus-qt6` / `qdbus`);
+3. scrapes the printed line back out of the systemd journal.
+
+Caveats: it needs `qdbus6` and `journalctl` (Plasma 6); journal scraping adds
+latency; and if your KWin logs to the **system** journal instead of the user
+journal, drop the `--user` flag on the `journalctl` line in the script. It is an
+untested example — the `kdotool` path above is preferred. See
+[`integrations/kde/README.md`](https://github.com/docloulou/Wayland-Wheeltani/blob/main/integrations/kde/README.md)
+for details.

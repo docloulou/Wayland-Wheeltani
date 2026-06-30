@@ -215,9 +215,11 @@ speed_detents_per_second = 32.0
 # deny_apps = ["firefox", "org.kde.dolphin"]
 # command_refresh_ms = 500
 
-# --- Example: external command (KWin, unsupported compositors, scripts) -----
+# --- Example: external command (unsupported compositors, scripts) -----------
 # The command prints the focused app id on stdout (plain text), or a JSON
 # object: {"app_id":"...","class":"...","title":"...","pid":123}
+# On KDE without kdotool you can use the bundled KWin script
+# integrations/kde/wheeltani-kwin-active-window.sh as the command.
 # [foreground]
 # enabled = true
 # provider = "command"

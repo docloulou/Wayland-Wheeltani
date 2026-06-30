@@ -24,6 +24,10 @@ Pre-releases (`-beta.N`) are published as semver pre-releases, so a plain
     `kdotool` is available, so it never shadows an already-working provider.
   - `--detect-foreground` works with the new provider too (it reuses the same
     provider selection) and reports the source as `Kde`.
+- **Bundled KWin example script** for users who prefer not to install `kdotool`:
+  [`integrations/kde/wheeltani-kwin-active-window.sh`](integrations/kde/) prints
+  the focused window's class via KWin's scripting D-Bus interface and plugs into
+  the generic `command` provider.
 
 ### Testing status
 

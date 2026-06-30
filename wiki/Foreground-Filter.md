@@ -133,6 +133,10 @@ command_refresh_ms = 500
 The command is run every `command_refresh_ms` milliseconds; its latest output is
 used as the focused application.
 
+For a concrete, copy-pasteable example, the KDE page ships a KWin script that
+works with this provider (no kdotool needed): see
+**[KDE setup → without kdotool](KDE-Setup#alternative-without-kdotool-a-kwin-script)**.
+
 ## Troubleshooting
 
 If the filter does not enable/disable the right apps, see the

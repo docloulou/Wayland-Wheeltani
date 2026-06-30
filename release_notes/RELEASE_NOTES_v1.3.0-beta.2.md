@@ -40,9 +40,25 @@ kdotool getactivewindow getwindowclassname   # sanity check
 - **`--detect-foreground`** works with the new provider too and reports the
   source as `Kde`.
 
+### Without kdotool (a KWin script)
+
+If you'd rather not install kdotool, this build also ships an example KWin script
+[`integrations/kde/wheeltani-kwin-active-window.sh`](https://github.com/docloulou/Wayland-Wheeltani/blob/main/integrations/kde/wheeltani-kwin-active-window.sh)
+that you can plug into the generic `command` provider — it prints the focused
+window's class via KWin's scripting D-Bus interface:
+
+```toml
+[foreground]
+enabled = true
+provider = "command"
+command = ["/full/path/to/integrations/kde/wheeltani-kwin-active-window.sh"]
+mode = "denylist"
+deny_apps = ["org.kde.dolphin", "firefox"]
+```
+
 See the
 [KDE setup](https://github.com/docloulou/Wayland-Wheeltani/wiki/KDE-Setup) wiki
-page for details.
+page for both options.
 
 ## Testing status & feedback
 
