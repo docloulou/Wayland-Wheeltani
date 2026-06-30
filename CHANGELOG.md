@@ -92,6 +92,38 @@ Pre-releases (`-beta.N`) are published as semver pre-releases, so a plain
     [GNOME setup](https://github.com/docloulou/Wayland-Wheeltani/wiki/GNOME-Setup)
     guide.
 
+## [1.2.0] - 2026-06-30
+
+First stable release of the 1.2.0 series, consolidating `1.2.0-beta.1` and
+`1.2.0-beta.2`. It makes mouse selection robust across reboots, USB ports and
+live unplug/replug — no more editing `/dev/input/eventXX` paths.
+
+### Added
+
+- **Runtime hot-reconnect**: the daemon survives a live unplug/replug without a
+  restart. It detects the physical disconnect (`POLLHUP`/`POLLERR` or a failed
+  read), keeps running, and re-resolves the mouse **by USB id** when it comes
+  back — even on a different port or `/dev/input/eventXX` node.
+- The virtual mouse is created once and kept alive across reconnections, so the
+  compositor never sees it disappear. Any in-flight gesture is cleared on
+  disconnect so no virtual button can stay stuck down.
+- As a `systemd --user` service (`--no-interactive`), the daemon waits
+  indefinitely for the configured mouse to appear, so the service can start
+  before the mouse is plugged in.
+
+### Changed
+
+- **Port-independent mouse matching**: `[device_match]` resolves the mouse by
+  USB id at startup, so moving it to another USB port keeps working. A pinned
+  `phys` (USB port) is relaxed automatically as a fallback, and `--setup` no
+  longer writes `phys` unless you pass `--pin-port`.
+
+### Compatibility
+
+- Backward compatible with 1.1.x configs. Existing `[device_match]` blocks keep
+  working; a previously pinned `phys` is now a soft hint (with USB-id fallback)
+  rather than a hard requirement.
+
 ## [1.2.0-beta.2] - 2026-06-30
 
 ### Added
@@ -128,6 +160,7 @@ Pre-releases (`-beta.N`) are published as semver pre-releases, so a plain
 - README troubleshooting and installation steps clarified (udev rule setup).
 
 [1.3.0-beta.1]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.0-beta.1
+[1.2.0]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.2.0
 [1.2.0-beta.2]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.2.0-beta.2
 [1.2.0-beta.1]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.2.0-beta.1
 [1.1.4]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.1.4
