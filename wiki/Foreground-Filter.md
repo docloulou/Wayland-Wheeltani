@@ -53,6 +53,12 @@ Detection relies on the **session bus / compositor sockets**, not on desktop
 environment variables, so it works from a `systemd --user` service even when
 `XDG_CURRENT_DESKTOP` is not exported.
 
+> **Tested providers:** so far only **gnome** has been verified by the author.
+> The `hyprland`, `sway`/i3 and `command` providers are implemented but not yet
+> confirmed on real sessions — feedback is welcome. The
+> [Troubleshooting](Troubleshooting#the-foreground-filter-does-not-disableenable-the-right-apps)
+> page lists the commands to debug them.
+
 > The daemon must run inside your graphical session to see the focused window.
 > The bundled `systemd --user` service does; running it as root (plain `sudo`)
 > will not have access to the compositor/session, and the filter falls back to

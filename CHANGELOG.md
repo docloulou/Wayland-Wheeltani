@@ -62,6 +62,36 @@ Pre-releases (`-beta.N`) are published as semver pre-releases, so a plain
   the session bus, not on desktop environment variables, so it works from a
   `--user` service even when `XDG_CURRENT_DESKTOP` is not exported.
 
+### Testing status
+
+- **Only the GNOME (Wayland) provider has been tested by the author.** The
+  `hyprland`, `sway`/i3 and `command` providers are implemented but **not yet
+  verified on real sessions** — feedback is very welcome so they can be
+  confirmed or fixed. The core autoscroll behaviour is unchanged when the filter
+  is left disabled.
+- Useful commands to debug the filter:
+  - `wayland-wheeltani --detect-foreground` — prints what the active provider
+    reports for the focused window plus the exact identifier to put in
+    `deny_apps` / `allow_apps`.
+  - Run the daemon in the foreground with debug logs to watch each decision
+    (stop the service first so it can grab the mouse):
+
+    ```bash
+    wayland-wheeltani --stop
+    wayland-wheeltani --no-interactive --config ~/.config/wayland-wheeltani/config.toml -v
+    # startup logs `foreground provider selected: <provider>`
+    #   (or `foreground provider unsupported: ...` if none matched);
+    # each gesture logs `foreground decision ... decision=Enabled|Disabled`.
+    # Ctrl-C when done, then restart the service:
+    wayland-wheeltani --start
+    ```
+
+  - `journalctl --user -u wayland-wheeltani -f` — follow the service logs.
+  - GNOME only: `gnome-extensions list --enabled | grep wheeltani-foreground`
+    and the `gdbus call … GetFocused` check from the
+    [GNOME setup](https://github.com/docloulou/Wayland-Wheeltani/wiki/GNOME-Setup)
+    guide.
+
 ## [1.2.0-beta.2] - 2026-06-30
 
 ### Added

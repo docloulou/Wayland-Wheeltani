@@ -74,6 +74,54 @@ The project is now released under the **BSD Zero Clause License (0BSD)**,
 replacing the previous `MIT OR Apache-2.0`. 0BSD is the most permissive option:
 use, copy, modify and distribute freely, with no attribution required.
 
+## Testing status & feedback
+
+> **Only the GNOME (Wayland) provider has been tested so far.** The `hyprland`,
+> `sway`/i3 and `command` providers are implemented but **not yet verified on
+> real sessions**. If you run one of those, please open an issue to report
+> whether it works — it will be confirmed or fixed for the stable release.
+
+The core autoscroll behaviour is unchanged when the filter is left disabled, so
+this is safe to try: if anything misbehaves, remove the `[foreground]` table (or
+set `enabled = false`) and you are back to the previous behaviour.
+
+## Debugging the foreground filter
+
+First, check what the provider reports for the window you care about:
+
+```bash
+wayland-wheeltani --detect-foreground
+# focus the target window during the countdown; it prints app_id / class /
+# resource_class / title and the exact identifier to copy into deny_apps.
+```
+
+Then run the daemon in the foreground with debug logs to watch each decision
+(stop the service first so the manual run can grab the mouse exclusively):
+
+```bash
+wayland-wheeltani --stop
+wayland-wheeltani --no-interactive --config ~/.config/wayland-wheeltani/config.toml -v
+# startup: `foreground provider selected: <provider>`
+#          (or `foreground provider unsupported: ...` if none matched)
+# per gesture: `foreground decision ... decision=Enabled|Disabled`
+# Ctrl-C when done, then:
+wayland-wheeltani --start
+```
+
+Other useful checks:
+
+```bash
+journalctl --user -u wayland-wheeltani -f      # follow the service logs
+wayland-wheeltani --list-devices               # confirm the mouse is resolved
+
+# GNOME only — confirm the extension is enabled and answering:
+gnome-extensions list --enabled | grep wheeltani-foreground
+gdbus call --session \
+  --dest org.docloulou.WheeltaniForeground \
+  --object-path /org/docloulou/WheeltaniForeground \
+  --method org.docloulou.WheeltaniForeground.GetFocused
+```
+
 ## Migrating an existing install
 
 Nothing to do beyond installing this build. Existing configs work unchanged and
