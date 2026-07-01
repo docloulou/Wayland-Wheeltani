@@ -18,6 +18,8 @@ mod errors;
 #[cfg(target_os = "linux")]
 mod event_router;
 #[cfg(target_os = "linux")]
+mod foreground;
+#[cfg(target_os = "linux")]
 mod indicator;
 #[cfg(target_os = "linux")]
 mod physical_mouse;
@@ -52,6 +54,7 @@ mod linux {
     use crate::device_discovery::{self, DeviceInfo, MatchCriteria};
     use crate::errors::DaemonError;
     use crate::event_router::{self, RoutedEvent};
+    use crate::foreground::{AutoscrollDecision, ForegroundGate};
     use crate::indicator::{Indicator, NoopIndicator};
     use crate::physical_mouse::PhysicalMouse;
     use crate::service;
@@ -65,6 +68,10 @@ mod linux {
     /// Polling interval while waiting for a `device_match`, both at startup and
     /// while waiting for the mouse to be plugged back in at runtime.
     const DEVICE_MATCH_RETRY_INTERVAL: Duration = Duration::from_millis(500);
+
+    /// Countdown shown by `--detect-foreground` so the user can focus the window
+    /// they want to identify before the snapshot is read.
+    const DETECT_COUNTDOWN_SECS: u64 = 3;
 
     /// Why the inner event loop returned. The supervisor in `run_daemon` uses
     /// this to decide between shutting down and re-acquiring the device.
@@ -152,6 +159,12 @@ mod linux {
         }
 
         let resolved = config_loader::resolve(&args)?;
+
+        if args.detect_foreground {
+            detect_foreground(&resolved.foreground);
+            return Ok(());
+        }
+
         let has_configured_device = resolved.device.is_some() || resolved.device_match.is_some();
         let should_save_device = args.setup
             || !has_configured_device
@@ -341,6 +354,119 @@ mod linux {
             .init();
     }
 
+    /// `--detect-foreground`: start the configured foreground provider, give the
+    /// user a moment to focus the target window, then print the focused app's
+    /// identity and the exact string to drop into `deny_apps`/`allow_apps`. This
+    /// shares the daemon's provider-selection logic, so it works with every
+    /// provider (auto/hyprland/sway/gnome/kde/command). It never opens the mouse.
+    fn detect_foreground(cfg: &crate::foreground::ForegroundConfig) {
+        use crate::foreground::config::ForegroundProviderKind;
+        use crate::foreground::filter::ForegroundSnapshot;
+
+        // Discovery should be useful even if the user left the filter on `none`:
+        // fall back to auto-detection in that case.
+        let mut cfg = cfg.clone();
+        if matches!(cfg.provider, ForegroundProviderKind::None) {
+            cfg.provider = ForegroundProviderKind::Auto;
+        }
+
+        let provider = crate::foreground::providers::select_provider(&cfg);
+
+        println!(
+            "Focus the window you want to identify; reading the focused app in {DETECT_COUNTDOWN_SECS}s..."
+        );
+        for remaining in (1..=DETECT_COUNTDOWN_SECS).rev() {
+            print!("\r  {remaining}... ");
+            io::stdout().flush().ok();
+            std::thread::sleep(Duration::from_secs(1));
+        }
+        print!("\r                 \r");
+        io::stdout().flush().ok();
+
+        // Threaded providers (hyprland/sway/command) may still be warming up:
+        // briefly poll for a Known snapshot before giving up.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let snapshot = loop {
+            let snapshot = provider.snapshot();
+            if matches!(snapshot, ForegroundSnapshot::Known(_)) || Instant::now() >= deadline {
+                break snapshot;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        };
+
+        match snapshot {
+            ForegroundSnapshot::Known(app) => print_foreground_detection(&app),
+            ForegroundSnapshot::Unknown { reason } => {
+                println!("Could not determine the focused application ({reason}).");
+                println!(
+                    "The provider is running but reported no focused window. Try again and make \
+                     sure the target window is actually focused during the countdown."
+                );
+            }
+            ForegroundSnapshot::Unsupported { reason } => {
+                println!("Foreground detection is not available ({reason}).");
+                println!(
+                    "Set `provider` under [foreground] (auto | hyprland | sway | gnome | kde | \
+                     command). On GNOME, install the bundled Shell extension (see \
+                     integrations/gnome/); on KDE Plasma, install `kdotool`."
+                );
+            }
+        }
+    }
+
+    /// Prints the detected window's identity fields and the candidate strings to
+    /// use in `deny_apps`/`allow_apps` (the same fields the matcher compares).
+    fn print_foreground_detection(app: &crate::foreground::filter::ForegroundApp) {
+        use crate::foreground::matcher::normalize;
+
+        let show = |o: &Option<String>| o.as_deref().unwrap_or("(none)").to_owned();
+        println!(
+            "Detected foreground application (source: {:?}):",
+            app.source
+        );
+        println!("  app_id         : {}", show(&app.app_id));
+        println!("  class          : {}", show(&app.class));
+        println!("  resource_class : {}", show(&app.resource_class));
+        println!("  title          : {}", show(&app.title));
+        println!(
+            "  pid            : {}",
+            app.pid
+                .map_or_else(|| "(none)".to_owned(), |p| p.to_string())
+        );
+        println!();
+
+        let mut candidates: Vec<String> = Vec::new();
+        for value in [&app.app_id, &app.class, &app.resource_class]
+            .into_iter()
+            .flatten()
+        {
+            let normalized = normalize(value);
+            if !normalized.is_empty() && !candidates.contains(&normalized) {
+                candidates.push(normalized);
+            }
+        }
+
+        if candidates.is_empty() {
+            println!(
+                "No stable identifier (app_id/class) was reported. Enable `match_title = true` to \
+                 match on the window title instead."
+            );
+            return;
+        }
+
+        println!("Use one of these identifiers (case-insensitive, `.desktop` ignored):");
+        for candidate in &candidates {
+            println!("    {candidate}");
+        }
+        println!();
+        println!("Example — block autoscroll in this app:");
+        println!("  [foreground]");
+        println!("  enabled = true");
+        println!("  provider = \"auto\"");
+        println!("  mode = \"denylist\"");
+        println!("  deny_apps = [\"{}\"]", candidates[0]);
+    }
+
     fn run_daemon(device_path: &Path, cfg: &ResolvedConfig) -> anyhow::Result<()> {
         info!(
             device = %device_path.display(),
@@ -375,14 +501,15 @@ mod linux {
 
         let mut engine = Engine::new(cfg.core.clone());
         let mut last_state = engine.state();
+        let mut foreground_gate = ForegroundGate::new(cfg.foreground.clone());
 
         // Initial open is fatal: `run()` already waited for a `device_match` to
         // appear, so a failure here is a genuine setup problem.
         let mut physical = open_and_grab(device_path, cfg)?;
         info!(name = physical.name(), "opened physical device");
 
-        let reconnect =
-            ReconnectMatch::from_config(cfg).unwrap_or_else(|| ReconnectMatch::from_device(&physical));
+        let reconnect = ReconnectMatch::from_config(cfg)
+            .unwrap_or_else(|| ReconnectMatch::from_device(&physical));
 
         let result = loop {
             let mut last_tick = Instant::now();
@@ -391,6 +518,7 @@ mod linux {
                 virtual_mouse.as_mut(),
                 &mut engine,
                 &mut indicator,
+                &mut foreground_gate,
                 &shutdown,
                 tick_period,
                 safety_timeout,
@@ -416,6 +544,9 @@ mod linux {
                     }
                     engine = Engine::new(cfg.core.clone());
                     last_state = engine.state();
+                    // Drop any latched gesture decision so the gap cannot leave
+                    // a stale foreground decision applied after reconnect.
+                    foreground_gate.reset_latch();
 
                     match wait_for_device(&reconnect, cfg, &shutdown) {
                         Some(p) => {
@@ -499,6 +630,7 @@ mod linux {
         mut virtual_mouse: Option<&mut VirtualMouse>,
         engine: &mut Engine,
         indicator: &mut dyn Indicator,
+        foreground_gate: &mut ForegroundGate,
         shutdown: &Arc<AtomicBool>,
         tick_period: Duration,
         safety_timeout: Option<Duration>,
@@ -541,8 +673,7 @@ mod linux {
 
             if let Some(revents) = revents {
                 // A hangup/error on the fd means the mouse was unplugged.
-                if revents
-                    .intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL)
+                if revents.intersects(PollFlags::POLLHUP | PollFlags::POLLERR | PollFlags::POLLNVAL)
                 {
                     warn!(?revents, "physical device hung up; treating as disconnect");
                     return Ok(LoopOutcome::DeviceLost);
@@ -554,6 +685,7 @@ mod linux {
                         virtual_mouse.as_deref_mut(),
                         engine,
                         indicator,
+                        foreground_gate,
                         dry_run,
                         last_state,
                     )?
@@ -588,6 +720,7 @@ mod linux {
         mut virtual_mouse: Option<&mut VirtualMouse>,
         engine: &mut Engine,
         indicator: &mut dyn Indicator,
+        foreground_gate: &mut ForegroundGate,
         dry_run: bool,
         last_state: &mut EngineState,
     ) -> anyhow::Result<bool> {
@@ -601,9 +734,37 @@ mod linux {
         };
 
         for ev in events {
-            match event_router::classify(&ev) {
-                RoutedEvent::Core(core_event) => {
-                    let actions = engine.process(core_event);
+            let routed = event_router::classify(&ev);
+            let decision = foreground_gate.decision_for_event(&routed, engine.state());
+
+            match decision {
+                AutoscrollDecision::Enabled => match routed {
+                    RoutedEvent::Core(core_event) => {
+                        let actions = engine.process(core_event);
+                        emit_actions(
+                            &actions,
+                            virtual_mouse.as_deref_mut(),
+                            dry_run,
+                            indicator,
+                            engine,
+                            last_state,
+                        )?;
+                    }
+                    RoutedEvent::DirectButton { button, pressed } => {
+                        let action = CoreAction::ForwardMouseButton { button, pressed };
+                        emit_actions(
+                            std::slice::from_ref(&action),
+                            virtual_mouse.as_deref_mut(),
+                            dry_run,
+                            indicator,
+                            engine,
+                            last_state,
+                        )?;
+                    }
+                    RoutedEvent::Ignore => {}
+                },
+                AutoscrollDecision::Disabled => {
+                    let actions = event_router::passthrough_actions(&routed);
                     emit_actions(
                         &actions,
                         virtual_mouse.as_deref_mut(),
@@ -613,19 +774,9 @@ mod linux {
                         last_state,
                     )?;
                 }
-                RoutedEvent::DirectButton { button, pressed } => {
-                    let action = CoreAction::ForwardMouseButton { button, pressed };
-                    emit_actions(
-                        std::slice::from_ref(&action),
-                        virtual_mouse.as_deref_mut(),
-                        dry_run,
-                        indicator,
-                        engine,
-                        last_state,
-                    )?;
-                }
-                RoutedEvent::Ignore => {}
             }
+
+            foreground_gate.after_event(&routed, engine.state());
         }
         Ok(true)
     }
@@ -719,6 +870,7 @@ mod linux {
                 grab: true,
                 dry_run: false,
                 safety_timeout_seconds: None,
+                foreground: crate::foreground::ForegroundConfig::default(),
             }
         }
 

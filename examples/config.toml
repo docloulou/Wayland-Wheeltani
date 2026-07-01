@@ -3,6 +3,11 @@
 # Copy this to ~/.config/Wayland-Wheeltani/config.toml and adjust to taste.
 # Every field is optional: missing values fall back to the built-in defaults
 # shown below. CLI flags always override config file values.
+#
+# NOTE on TOML ordering: plain `key = value` settings must appear BEFORE any
+# `[table]` or `[[array.of.tables]]` header (such as `[[scroll_speed_steps]]`
+# or `[foreground]`), otherwise TOML attaches them to that table instead of the
+# top level.
 
 # --- device selection ------------------------------------------------------
 #
@@ -67,33 +72,6 @@ max_speed_detents_per_second = 32.0
 # Used only when scroll_speed_steps is empty.
 acceleration_exponent = 1.6
 
-# Scroll speed profile by vertical distance from the middle-button press point.
-# distance_units is an absolute evdev REL_Y distance, not just distance beyond
-# the deadzone. The last reached step controls the speed. Direction is still
-# determined by whether you moved down or up from the original press point.
-#
-# Example: with the defaults below, moving 40 units away scrolls at 4 detents/s;
-# moving 140 units away scrolls at 18 detents/s.
-[[scroll_speed_steps]]
-distance_units = 11
-speed_detents_per_second = 1.5
-
-[[scroll_speed_steps]]
-distance_units = 40
-speed_detents_per_second = 4.0
-
-[[scroll_speed_steps]]
-distance_units = 80
-speed_detents_per_second = 10.0
-
-[[scroll_speed_steps]]
-distance_units = 140
-speed_detents_per_second = 18.0
-
-[[scroll_speed_steps]]
-distance_units = 220
-speed_detents_per_second = 32.0
-
 # Internal scroll emission rate. 120 Hz matches the rate at which most
 # Wayland compositors poll input.
 tick_hz = 120
@@ -138,3 +116,114 @@ horizontal_scroll = true
 # pathologically large dt (e.g. system was paused) from generating a giant
 # scroll burst.
 max_detents_per_tick = 4
+
+# Scroll speed profile by vertical distance from the middle-button press point.
+# distance_units is an absolute evdev REL_Y distance, not just distance beyond
+# the deadzone. The last reached step controls the speed. Direction is still
+# determined by whether you moved down or up from the original press point.
+#
+# Example: with the defaults below, moving 40 units away scrolls at 4 detents/s;
+# moving 140 units away scrolls at 18 detents/s.
+[[scroll_speed_steps]]
+distance_units = 11
+speed_detents_per_second = 1.5
+
+[[scroll_speed_steps]]
+distance_units = 40
+speed_detents_per_second = 4.0
+
+[[scroll_speed_steps]]
+distance_units = 80
+speed_detents_per_second = 10.0
+
+[[scroll_speed_steps]]
+distance_units = 140
+speed_detents_per_second = 18.0
+
+[[scroll_speed_steps]]
+distance_units = 220
+speed_detents_per_second = 32.0
+
+# ---- foreground application filter (optional) -----------------------------
+#
+# Enable or disable autoscroll depending on the focused application. Disabled
+# by default, so leaving this table out keeps the historical behaviour. When an
+# app is "disabled", mouse events are passed straight through (the middle click
+# works normally in that app); only the autoscroll gesture is suppressed.
+#
+# The decision is taken once when the middle button goes down and held until it
+# is released, so changing focus mid-scroll never corrupts a gesture.
+#
+# Tip: run `wayland-wheeltani --detect-foreground`, focus the target window
+# during the countdown, and it prints the exact string to put in deny_apps /
+# allow_apps (works with every provider).
+#
+# [foreground]
+# enabled = false
+#
+# provider = "auto"          # auto | none | hyprland | sway | gnome | kde | command
+#   # "auto" tries, in order: hyprland, sway, gnome (needs the bundled GNOME
+#   # Shell extension), kde (needs the `kdotool` helper), command, then none.
+#
+# mode = "denylist"          # denylist | allowlist
+# unknown_policy = "enabled" # enabled | disabled  (used when the focused app
+#                            # cannot be determined; "enabled" never breaks an
+#                            # existing setup)
+#
+# # Matching is case-insensitive against app_id, class and resource_class
+# # (and title only when match_title = true). A trailing ".desktop" is ignored.
+# allow_apps = []
+# deny_apps = []
+# match_title = false
+#
+# # Only used with provider = "command":
+# command = []
+# command_refresh_ms = 500
+
+# --- Example: denylist (autoscroll everywhere except these apps) ------------
+# [foreground]
+# enabled = true
+# provider = "auto"
+# mode = "denylist"
+# unknown_policy = "enabled"
+# deny_apps = ["firefox", "org.mozilla.firefox", "steam", "blender"]
+
+# --- Example: strict allowlist (autoscroll only in these apps) --------------
+# [foreground]
+# enabled = true
+# provider = "auto"
+# mode = "allowlist"
+# unknown_policy = "disabled"
+# allow_apps = ["firefox", "org.mozilla.firefox", "chromium", "code"]
+
+# --- Example: GNOME (needs the bundled GNOME Shell extension) ---------------
+# Install it with: integrations/gnome/install.sh  (then log out/in on Wayland)
+# [foreground]
+# enabled = true
+# provider = "gnome"
+# mode = "denylist"
+# deny_apps = ["firefox", "org.gnome.Nautilus"]
+
+# --- Example: KDE Plasma / KWin (needs the `kdotool` helper) ----------------
+# Install kdotool (https://github.com/jinliu/kdotool), e.g. `cargo install
+# kdotool` or your distro's package. "auto" also picks KDE when kdotool is
+# present. command_refresh_ms controls how often the active window is polled.
+# [foreground]
+# enabled = true
+# provider = "kde"
+# mode = "denylist"
+# deny_apps = ["firefox", "org.kde.dolphin"]
+# command_refresh_ms = 500
+
+# --- Example: external command (unsupported compositors, scripts) -----------
+# The command prints the focused app id on stdout (plain text), or a JSON
+# object: {"app_id":"...","class":"...","title":"...","pid":123}
+# On KDE without kdotool you can use the bundled KWin script
+# integrations/kde/wheeltani-kwin-active-window.sh as the command.
+# [foreground]
+# enabled = true
+# provider = "command"
+# mode = "denylist"
+# deny_apps = ["krita", "blender"]
+# command = ["wheeltani-current-app"]
+# command_refresh_ms = 500

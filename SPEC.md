@@ -90,3 +90,29 @@ installs a root-owned udev rule for the selected mouse and `/dev/uinput`;
 `--install-service` installs and starts a systemd user service using the saved
 config; `--remove-service` stops, disables, and removes it. Services should run
 with `--no-interactive` so they fail instead of blocking on prompts.
+
+## Foreground application filter
+
+An optional `[foreground]` config table enables or disables autoscroll based on
+the focused application. It is disabled by default, so an unconfigured daemon is
+unchanged. When enabled, a decision layer sits between the event router and the
+core engine: at each middle-button press it evaluates the focused app and either
+lets the engine handle the gesture (autoscroll) or passes the raw events through
+to the virtual mouse untouched (native middle click/wheel). The decision is
+latched for the duration of a gesture, so a focus change mid-scroll cannot leave
+the engine in an inconsistent state, and it is reset on device reconnect.
+
+Matching is case-insensitive against `app_id`, `class`, and `resource_class`
+(and `title` only when `match_title = true`), with a trailing `.desktop`
+ignored. `mode` selects `denylist` or `allowlist`; `unknown_policy` decides
+behaviour when the focused app cannot be resolved (defaulting to `enabled` so a
+missing provider never breaks autoscroll).
+
+The focused window is resolved by a provider, chosen explicitly or via
+`provider = "auto"` (tried in order: Hyprland event socket, Sway/i3 IPC, GNOME,
+external command, then none). Providers run on a background thread and expose a
+non-blocking snapshot, so the input hot path never performs I/O. The GNOME
+provider talks to a bundled GNOME Shell extension over the session bus via the
+`gdbus` binary (no D-Bus crate dependency); the daemon must run inside the user
+session (its `systemd --user` service does) to reach the bus and compositor
+sockets. The extension and its installer live in `integrations/gnome/`.

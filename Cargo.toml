@@ -17,15 +17,16 @@ members = [
 default-members = ["crates/middle-scroll-core"]
 
 [workspace.package]
-version = "1.2.0"
+version = "1.3.0"
 edition = "2021"
 rust-version = "1.74"
-license = "MIT OR Apache-2.0"
+license = "0BSD"
 repository = "https://github.com/docloulou/Wayland-Wheeltani"
 description = "Progressive middle-button autoscroll daemon for Wayland (evdev/uinput)."
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "1"
 
 # Linux-only deps (only used by wayland-wheeltani)

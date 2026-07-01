@@ -1,0 +1,8 @@
+{
+  "uuid": "wheeltani-foreground@docloulou.github.io",
+  "name": "Wayland-Wheeltani Foreground",
+  "description": "Exposes the focused window's app id, WM class and title on the session bus (org.docloulou.WheeltaniForeground) so the Wayland-Wheeltani autoscroll daemon can enable or disable autoscroll per application. Read-only; no data leaves the machine and no network access is used.",
+  "shell-version": ["45", "46", "47", "48"],
+  "url": "https://github.com/docloulou/Wayland-Wheeltani",
+  "version": 1
+}

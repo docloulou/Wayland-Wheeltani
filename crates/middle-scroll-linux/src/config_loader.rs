@@ -12,6 +12,7 @@ use tracing::{info, warn};
 use crate::cli::Args;
 use crate::device_discovery::{DeviceInfo, MatchCriteria};
 use crate::errors::DaemonError;
+use crate::foreground::{ForegroundConfig, ForegroundFileConfig};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -21,6 +22,8 @@ pub struct DaemonFileConfig {
     pub grab: Option<bool>,
     pub dry_run: Option<bool>,
     pub safety_timeout_seconds: Option<u64>,
+
+    pub foreground: Option<ForegroundFileConfig>,
 
     #[serde(flatten)]
     pub core: CoreFileConfig,
@@ -61,18 +64,16 @@ impl DeviceMatchConfig {
     }
 
     pub fn parse(&self) -> Result<ParsedDeviceMatch, DaemonError> {
-        let vendor_id = parse_hex_id(&self.vendor_id).ok_or_else(|| {
-            DaemonError::DeviceMatchInvalid {
+        let vendor_id =
+            parse_hex_id(&self.vendor_id).ok_or_else(|| DaemonError::DeviceMatchInvalid {
                 field: "vendor_id".to_owned(),
                 value: self.vendor_id.clone(),
-            }
-        })?;
-        let product_id = parse_hex_id(&self.product_id).ok_or_else(|| {
-            DaemonError::DeviceMatchInvalid {
+            })?;
+        let product_id =
+            parse_hex_id(&self.product_id).ok_or_else(|| DaemonError::DeviceMatchInvalid {
                 field: "product_id".to_owned(),
                 value: self.product_id.clone(),
-            }
-        })?;
+            })?;
         Ok(ParsedDeviceMatch {
             vendor_id,
             product_id,
@@ -220,6 +221,7 @@ pub struct ResolvedConfig {
     pub grab: bool,
     pub dry_run: bool,
     pub safety_timeout_seconds: Option<u64>,
+    pub foreground: ForegroundConfig,
 }
 
 /// XDG-compliant config directory name. Lowercase by convention (and because
@@ -284,6 +286,7 @@ pub fn resolve(args: &Args) -> Result<ResolvedConfig, DaemonError> {
     let mut grab = true;
     let mut dry_run = false;
     let mut safety_timeout_seconds = None;
+    let mut foreground = ForegroundConfig::default();
 
     if let Some(file) = file_cfg {
         core = file.core.into_core(core);
@@ -308,6 +311,9 @@ pub fn resolve(args: &Args) -> Result<ResolvedConfig, DaemonError> {
         }
         if let Some(v) = file.safety_timeout_seconds {
             safety_timeout_seconds = Some(v);
+        }
+        if let Some(fg) = file.foreground {
+            foreground = fg.into_resolved();
         }
     }
 
@@ -334,6 +340,7 @@ pub fn resolve(args: &Args) -> Result<ResolvedConfig, DaemonError> {
         grab,
         dry_run,
         safety_timeout_seconds,
+        foreground,
     })
 }
 
@@ -545,6 +552,7 @@ mod tests {
             no_interactive: false,
             verbose: 0,
             safety_timeout_seconds: None,
+            detect_foreground: false,
         }
     }
 
