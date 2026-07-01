@@ -20,6 +20,9 @@ cargo install wayland-wheeltani
 `cargo install` only installs the binary. It does not run setup prompts, install
 udev rules, or create systemd services automatically.
 
+It also installs `wlw`, a short alias for the exact same binary — every
+command below works identically with `wlw` instead of `wayland-wheeltani`.
+
 If `wayland-wheeltani` is not found after install, make sure Cargo's bin
 directory is on your `PATH`:
 
@@ -88,7 +91,7 @@ sudo udevadm control --reload-rules
 sudo apt update
 sudo apt install -y build-essential pkg-config
 cargo build --release -p wayland-wheeltani
-# Binary: target/release/wayland-wheeltani
+# Binaries: target/release/wayland-wheeltani and target/release/wlw (alias)
 
 install -Dm755 target/release/wayland-wheeltani ~/.local/bin/wayland-wheeltani
 sudo ~/.local/bin/wayland-wheeltani --setup --install-udev-rule

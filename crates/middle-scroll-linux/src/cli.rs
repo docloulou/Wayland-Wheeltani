@@ -4,7 +4,7 @@ use clap::{ArgAction, Parser};
 
 #[derive(Debug, Parser)]
 #[command(
-    name = "wayland-wheeltani",
+    name = env!("CARGO_BIN_NAME"),
     version,
     about = "Progressive middle-button autoscroll daemon for Wayland.",
     long_about = "Holds the middle button to enter a progressive autoscroll mode whose speed \

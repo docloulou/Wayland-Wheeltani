@@ -85,6 +85,7 @@ jobs:
 
           mkdir -p "$staging"
           cp "target/${{ matrix.target }}/release/${BIN_NAME}" "$staging/${BIN_NAME}"
+          cp "target/${{ matrix.target }}/release/wlw" "$staging/wlw"
           cp README.md LICENSE "$staging/"
           cp -R contrib "$staging/"
           tar -C dist -czf "dist/${archive}" "${BIN_NAME}-${version}-${{ matrix.label }}"

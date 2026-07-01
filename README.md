@@ -23,6 +23,21 @@ hold middle button
 No GUI, no overlay, no network, no keyboard capture. The project is split into a
 portable, unit-tested Rust core and a Linux backend using `evdev` + `uinput`.
 
+## Features
+
+| Feature | Details | Wiki |
+|---|---|---|
+| **Progressive autoscroll** | Speed follows the distance from the middle-button press point; a short click still behaves as a normal middle click | — |
+| **Stable device matching** | Matches your mouse by USB vendor/product id, so config survives reboots and USB port changes | [Configuration](https://github.com/docloulou/Wayland-Wheeltani/wiki/Configuration) |
+| **Runtime hot-reconnect** | Survives a live unplug/replug without restarting the daemon | [Configuration](https://github.com/docloulou/Wayland-Wheeltani/wiki/Configuration) |
+| **Per-application foreground filter** | Turn autoscroll on/off per focused app (denylist/allowlist); off by default | [Foreground filter](https://github.com/docloulou/Wayland-Wheeltani/wiki/Foreground-Filter) |
+| **Foreground providers** | Hyprland, Sway/i3, GNOME (bundled Shell extension), KDE Plasma (`kdotool`), or any custom command | [Foreground filter](https://github.com/docloulou/Wayland-Wheeltani/wiki/Foreground-Filter) · [GNOME setup](https://github.com/docloulou/Wayland-Wheeltani/wiki/GNOME-Setup) · [KDE setup](https://github.com/docloulou/Wayland-Wheeltani/wiki/KDE-Setup) |
+| **`--detect-foreground` helper** | Prints the exact identifier to use in `deny_apps`/`allow_apps` | [Foreground filter](https://github.com/docloulou/Wayland-Wheeltani/wiki/Foreground-Filter) |
+| **`systemd --user` service** | Install, start, stop, and restart the daemon as a user service | [Installation](https://github.com/docloulou/Wayland-Wheeltani/wiki/Installation) |
+| **Root-free daily use** | Generates a targeted udev rule for your mouse and `/dev/uinput` | [Installation](https://github.com/docloulou/Wayland-Wheeltani/wiki/Installation) · [Troubleshooting](https://github.com/docloulou/Wayland-Wheeltani/wiki/Troubleshooting) |
+| **`wlw` short CLI alias** | Same binary as `wayland-wheeltani`, shorter to type | [Installation](https://github.com/docloulou/Wayland-Wheeltani/wiki/Installation) |
+| **Dry-run & verbose logging** | `--dry-run` and `-v`/`-vv` to debug without touching the virtual mouse | [Configuration](https://github.com/docloulou/Wayland-Wheeltani/wiki/Configuration) |
+
 ## Quick start
 
 Requirements: a Linux Wayland session, a mouse on `/dev/input/eventX`,
@@ -37,6 +52,10 @@ sudo "$HOME/.cargo/bin/wayland-wheeltani" --setup --install-udev-rule
 sudo udevadm control --reload-rules
 wayland-wheeltani --install-service
 ```
+
+`cargo install` also installs `wlw` as a short alias for the exact same
+binary — `wlw --start`, `wlw --setup`, etc. all work identically to
+`wayland-wheeltani`.
 
 Manage the service:
 
