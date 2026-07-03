@@ -10,7 +10,9 @@ mod kde;
 mod none;
 mod sway;
 
+use std::process::{Command, Output, Stdio};
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tracing::{info, warn};
@@ -44,12 +46,50 @@ pub(super) fn store(shared: &SharedSnapshot, snapshot: ForegroundSnapshot) {
     }
 }
 
+/// How long provider helper subprocesses (`gdbus`, `kdotool`, the user's
+/// `command`) are allowed to run before being killed. Prevents a hung helper
+/// from freezing a provider thread forever with a stale snapshot.
+pub(super) const HELPER_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Interval between `try_wait` polls in [`run_with_timeout`].
+const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Runs `cmd` to completion, killing it if it exceeds `timeout`.
+///
+/// Returns `Ok(None)` when the child was killed on timeout. The child's
+/// stdout/stderr are piped and collected after exit; this is safe here because
+/// every helper prints at most a few hundred bytes (well under the pipe
+/// buffer), so the child can never block on a full pipe before exiting.
+pub(super) fn run_with_timeout(
+    cmd: &mut Command,
+    timeout: Duration,
+) -> std::io::Result<Option<Output>> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait()? {
+            Some(_) => return child.wait_with_output().map(Some),
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(None);
+            }
+            None => std::thread::sleep(WAIT_POLL_INTERVAL),
+        }
+    }
+}
+
 /// True when `name` currently has an owner on the session bus. Shells out to
-/// `gdbus` (no D-Bus crate, per the dependency policy); a missing `gdbus` or a
-/// failed call is treated as "not owned". Shared by the GNOME and KDE providers.
+/// `gdbus` (no D-Bus crate, per the dependency policy); a missing `gdbus`, a
+/// failed call, or a timeout is treated as "not owned". Shared by the GNOME
+/// and KDE providers.
 pub(super) fn dbus_name_has_owner(name: &str) -> bool {
-    std::process::Command::new("gdbus")
-        .args([
+    run_with_timeout(
+        Command::new("gdbus").args([
             "call",
             "--session",
             "--dest",
@@ -59,9 +99,12 @@ pub(super) fn dbus_name_has_owner(name: &str) -> bool {
             "--method",
             "org.freedesktop.DBus.NameHasOwner",
             name,
-        ])
-        .output()
-        .is_ok_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("true"))
+        ]),
+        HELPER_TIMEOUT,
+    )
+    .ok()
+    .flatten()
+    .is_some_and(|o| o.status.success() && String::from_utf8_lossy(&o.stdout).contains("true"))
 }
 
 /// Builds a [`ForegroundApp`] from a JSON object shared by the `command` and

@@ -55,25 +55,26 @@ drives vertical wheel output. When `horizontal_scroll = true`, horizontal offset
 drives horizontal wheel output. Both axes use the same speed profile and can emit
 simultaneously during diagonal motion.
 
-V1 uses configurable distance steps by default:
+The default profile is a smooth progressive curve:
 
 1. offset inside `deadzone_units` => no scroll;
-2. each `scroll_speed_steps` entry maps an absolute axis distance from the
-   original press point to a speed in wheel detents per second;
-3. the last reached step controls the current speed;
-4. `max_offset_units` caps the tracked offset;
-5. `max_detents_per_tick` caps bursts after long scheduler delays.
+2. beyond the deadzone the speed interpolates continuously between
+   `min_speed_detents_per_second` and `max_speed_detents_per_second`, reaching
+   the maximum `full_speed_units` past the deadzone edge, shaped by
+   `acceleration_exponent` (1.0 = linear, >1 = soft start);
+3. `max_offset_units` caps the tracked offset;
+4. `max_detents_per_tick` caps bursts after long scheduler delays.
 
-Example: if the current absolute distance is 100 units and the configured steps
-are 40=>4 detents/s and 80=>10 detents/s, the engine scrolls at 10 detents/s.
+Configs that define `[[scroll_speed_steps]]` entries switch to a stepped
+profile instead (this was the built-in default up to 1.3.1, so older config
+files keep their exact behaviour): each entry maps an absolute axis distance
+from the original press point to a speed in wheel detents per second, and the
+last reached step controls the current speed. Example: if the current absolute
+distance is 100 units and the configured steps are 40=>4 detents/s and
+80=>10 detents/s, the engine scrolls at 10 detents/s.
 
-Moving back toward the press point can drop to a slower step or stop inside the
-deadzone. Crossing the press point reverses direction on that axis.
-
-For users who prefer the older continuous curve, `scroll_speed_steps = []` makes
-the engine fall back to `min_speed_detents_per_second`,
-`max_speed_detents_per_second`, `full_speed_units`, and
-`acceleration_exponent`.
+In both profiles, moving back toward the press point slows down or stops inside
+the deadzone, and crossing the press point reverses direction on that axis.
 
 ## Configuration and setup
 

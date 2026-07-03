@@ -93,9 +93,20 @@ impl fmt::Debug for ForegroundGate {
 
 impl ForegroundGate {
     /// Builds a gate for `cfg`, selecting and starting the appropriate provider.
+    ///
+    /// When the filter is disabled no provider is started at all: the gate
+    /// answers `Enabled` without ever consulting a snapshot, so spawning
+    /// provider threads (and their `gdbus`/`kdotool` subprocesses) would only
+    /// burn CPU and memory for nothing.
     #[must_use]
     pub fn new(cfg: ForegroundConfig) -> Self {
-        let provider = super::providers::select_provider(&cfg);
+        let provider: Box<dyn ForegroundProvider> = if cfg.enabled {
+            super::providers::select_provider(&cfg)
+        } else {
+            Box::new(super::providers::NoneProvider::new(
+                "foreground filter disabled",
+            ))
+        };
         tracing::debug!(
             enabled = cfg.enabled,
             provider = ?cfg.provider,

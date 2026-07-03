@@ -65,11 +65,15 @@ max_offset_units = 240
 # Scroll velocity envelope, expressed in classic wheel detents per second.
 # 1.5 detent/s feels like a slow, deliberate page glide.
 # 32 detent/s feels close to "fling".
+# By default the speed follows a smooth progressive curve between these two
+# values as the pointer moves away from the press point (see
+# acceleration_exponent and full_speed_units). Define [[scroll_speed_steps]]
+# below to switch to a stepped profile instead.
 min_speed_detents_per_second = 1.5
 max_speed_detents_per_second = 32.0
 
-# Curve shape for the speed mapping (1.0 = linear, >1 = soft start, <1 = aggressive).
-# Used only when scroll_speed_steps is empty.
+# Curve shape for the smooth progressive speed mapping (1.0 = linear,
+# >1 = soft start, <1 = aggressive). Ignored when scroll_speed_steps is set.
 acceleration_exponent = 1.6
 
 # Internal scroll emission rate. 120 Hz matches the rate at which most
@@ -117,32 +121,36 @@ horizontal_scroll = true
 # scroll burst.
 max_detents_per_tick = 4
 
-# Scroll speed profile by vertical distance from the middle-button press point.
-# distance_units is an absolute evdev REL_Y distance, not just distance beyond
-# the deadzone. The last reached step controls the speed. Direction is still
+# OPTIONAL stepped speed profile. When at least one [[scroll_speed_steps]]
+# entry is present, it REPLACES the smooth progressive curve: distance_units
+# is an absolute evdev distance from the press point (not just beyond the
+# deadzone), the last reached step controls the speed, and direction is still
 # determined by whether you moved down or up from the original press point.
+# Leave all entries commented out (the default) for smooth progressive scroll.
 #
-# Example: with the defaults below, moving 40 units away scrolls at 4 detents/s;
-# moving 140 units away scrolls at 18 detents/s.
-[[scroll_speed_steps]]
-distance_units = 11
-speed_detents_per_second = 1.5
-
-[[scroll_speed_steps]]
-distance_units = 40
-speed_detents_per_second = 4.0
-
-[[scroll_speed_steps]]
-distance_units = 80
-speed_detents_per_second = 10.0
-
-[[scroll_speed_steps]]
-distance_units = 140
-speed_detents_per_second = 18.0
-
-[[scroll_speed_steps]]
-distance_units = 220
-speed_detents_per_second = 32.0
+# Example: with the steps below, moving 40 units away scrolls at 4 detents/s;
+# moving 140 units away scrolls at 18 detents/s. These were the built-in
+# defaults up to version 1.3.1.
+#
+# [[scroll_speed_steps]]
+# distance_units = 11
+# speed_detents_per_second = 1.5
+#
+# [[scroll_speed_steps]]
+# distance_units = 40
+# speed_detents_per_second = 4.0
+#
+# [[scroll_speed_steps]]
+# distance_units = 80
+# speed_detents_per_second = 10.0
+#
+# [[scroll_speed_steps]]
+# distance_units = 140
+# speed_detents_per_second = 18.0
+#
+# [[scroll_speed_steps]]
+# distance_units = 220
+# speed_detents_per_second = 32.0
 
 # ---- foreground application filter (optional) -----------------------------
 #

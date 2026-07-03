@@ -15,6 +15,9 @@ const VERSION: u16 = 0x0001;
 #[derive(Debug)]
 pub struct VirtualMouse {
     device: VirtualDevice,
+    /// Reusable encode buffer: `apply_batch` runs for every forwarded input
+    /// event, so this avoids a heap allocation per event on the hot path.
+    event_buf: Vec<InputEvent>,
 }
 
 impl VirtualMouse {
@@ -60,18 +63,21 @@ impl VirtualMouse {
             .build()
             .map_err(uinput_err)?;
 
-        Ok(Self { device })
+        Ok(Self {
+            device,
+            event_buf: Vec::with_capacity(16),
+        })
     }
 
     pub fn apply_batch(&mut self, actions: &[CoreAction]) -> io::Result<()> {
-        let mut buf = Vec::with_capacity(actions.len() * 2);
+        self.event_buf.clear();
         for a in actions {
-            encode_action(a, &mut buf);
+            encode_action(a, &mut self.event_buf);
         }
-        if buf.is_empty() {
+        if self.event_buf.is_empty() {
             return Ok(());
         }
-        self.device.emit(&buf)
+        self.device.emit(&self.event_buf)
     }
 
     pub fn emit_middle_click(&mut self) -> io::Result<()> {

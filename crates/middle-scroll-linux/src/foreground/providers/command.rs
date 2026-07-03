@@ -12,7 +12,7 @@ use crate::foreground::filter::{
     ForegroundApp, ForegroundProvider, ForegroundSnapshot, ForegroundSourceKind,
 };
 
-use super::{json_to_app, read_snapshot, store, SharedSnapshot};
+use super::{json_to_app, read_snapshot, run_with_timeout, store, SharedSnapshot, HELPER_TIMEOUT};
 
 /// Floor for the refresh interval to avoid a busy loop on a misconfigured `0`.
 const MIN_REFRESH: Duration = Duration::from_millis(50);
@@ -74,17 +74,20 @@ fn run_once(command: &[String]) -> ForegroundSnapshot {
             reason: "foreground.command is empty".to_owned(),
         };
     };
-    match Command::new(bin).args(args).output() {
-        Ok(out) if out.status.success() => {
+    match run_with_timeout(Command::new(bin).args(args), HELPER_TIMEOUT) {
+        Ok(Some(out)) if out.status.success() => {
             let stdout = String::from_utf8_lossy(&out.stdout);
             parse_stdout(&stdout)
         }
-        Ok(out) => {
+        Ok(Some(out)) => {
             debug!(status = %out.status, "foreground command exited unsuccessfully");
             ForegroundSnapshot::Unknown {
                 reason: format!("command exited with {}", out.status),
             }
         }
+        Ok(None) => ForegroundSnapshot::Unknown {
+            reason: "command timed out (killed)".to_owned(),
+        },
         Err(err) => ForegroundSnapshot::Unknown {
             reason: format!("command failed to run: {err}"),
         },

@@ -64,7 +64,11 @@ impl Default for CoreConfig {
             min_speed_detents_per_second: 1.5,
             max_speed_detents_per_second: 32.0,
             acceleration_exponent: 1.6,
-            scroll_speed_steps: default_scroll_speed_steps(),
+            // Empty by default: scrolling follows the smooth progressive curve
+            // (min/max speed, full_speed_units, acceleration_exponent).
+            // Configs that define `[[scroll_speed_steps]]` keep the stepped
+            // profile, so pre-1.3.2 files behave exactly as before.
+            scroll_speed_steps: Vec::new(),
 
             tick_hz: 120,
 
@@ -107,6 +111,8 @@ pub enum ConfigError {
     BadMaxDetents(i32),
     #[error("min_hires_units_per_event must be in 1..=120, got {0}")]
     BadMinHiResUnits(i32),
+    #[error("at least one of emit_hires_wheel / emit_legacy_wheel must be true, otherwise autoscroll emits nothing")]
+    NoWheelEmitter,
     #[error("scroll_speed_steps[{index}].distance_units must be > deadzone_units ({deadzone}), got {distance}")]
     BadSpeedStepDistance {
         index: usize,
@@ -174,6 +180,9 @@ impl CoreConfig {
                 self.min_hires_units_per_event,
             ));
         }
+        if !self.emit_hires_wheel && !self.emit_legacy_wheel {
+            return Err(ConfigError::NoWheelEmitter);
+        }
         let mut previous_distance = None;
         for (index, step) in self.scroll_speed_steps.iter().enumerate() {
             if step.distance_units <= self.deadzone_units {
@@ -211,27 +220,3 @@ impl CoreConfig {
     }
 }
 
-fn default_scroll_speed_steps() -> Vec<SpeedStep> {
-    vec![
-        SpeedStep {
-            distance_units: 11,
-            speed_detents_per_second: 1.5,
-        },
-        SpeedStep {
-            distance_units: 40,
-            speed_detents_per_second: 4.0,
-        },
-        SpeedStep {
-            distance_units: 80,
-            speed_detents_per_second: 10.0,
-        },
-        SpeedStep {
-            distance_units: 140,
-            speed_detents_per_second: 18.0,
-        },
-        SpeedStep {
-            distance_units: 220,
-            speed_detents_per_second: 32.0,
-        },
-    ]
-}

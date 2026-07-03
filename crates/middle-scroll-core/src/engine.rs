@@ -11,7 +11,11 @@ pub struct Engine {
     hires_accumulator_y: f64,
     detent_accumulator_x: f64,
     hires_accumulator_x: f64,
-    pending_motion: Vec<(i32, i32)>,
+    /// Net pointer displacement accumulated while `MiddlePending`, replayed as
+    /// a single motion before a short click when
+    /// `replay_pending_motion_on_click` is set. Kept as a compact sum (not a
+    /// list of events) so a long press can never grow memory unboundedly.
+    pending_motion: (i32, i32),
 }
 
 impl Engine {
@@ -25,7 +29,7 @@ impl Engine {
             hires_accumulator_y: 0.0,
             detent_accumulator_x: 0.0,
             hires_accumulator_x: 0.0,
-            pending_motion: Vec::new(),
+            pending_motion: (0, 0),
         }
     }
 
@@ -45,163 +49,174 @@ impl Engine {
         self.offset_x_units
     }
 
+    /// Convenience wrapper around [`process_into`] that returns a fresh `Vec`.
+    /// Prefer `process_into` with a reused buffer on hot paths.
+    ///
+    /// [`process_into`]: Engine::process_into
     pub fn process(&mut self, event: CoreInputEvent) -> Vec<CoreAction> {
+        let mut out = Vec::new();
+        self.process_into(event, &mut out);
+        out
+    }
+
+    /// Processes one input event, appending the resulting actions to `out`.
+    /// The buffer is not cleared, so callers can batch several events; on hot
+    /// paths this avoids one heap allocation per input event.
+    pub fn process_into(&mut self, event: CoreInputEvent, out: &mut Vec<CoreAction>) {
         match self.state {
-            EngineState::Idle => self.process_idle(event),
-            EngineState::MiddlePending => self.process_pending(event),
-            EngineState::Scrolling => self.process_scrolling(event),
+            EngineState::Idle => self.process_idle(event, out),
+            EngineState::MiddlePending => self.process_pending(event, out),
+            EngineState::Scrolling => self.process_scrolling(event, out),
         }
     }
 
-    fn process_idle(&mut self, event: CoreInputEvent) -> Vec<CoreAction> {
+    fn process_idle(&mut self, event: CoreInputEvent, out: &mut Vec<CoreAction>) {
         match event {
             CoreInputEvent::MiddleDown => {
                 self.state = EngineState::MiddlePending;
                 self.reset_offsets_and_accumulators();
-                self.pending_motion.clear();
-                vec![CoreAction::Suppress]
+                self.pending_motion = (0, 0);
+                out.push(CoreAction::Suppress);
             }
             CoreInputEvent::MiddleUp => {
-                vec![CoreAction::ForwardMouseButton {
+                out.push(CoreAction::ForwardMouseButton {
                     button: MouseButton::Middle,
                     pressed: false,
-                }]
+                });
             }
-            CoreInputEvent::LeftDown => Self::forward_btn(MouseButton::Left, true),
-            CoreInputEvent::LeftUp => Self::forward_btn(MouseButton::Left, false),
-            CoreInputEvent::RightDown => Self::forward_btn(MouseButton::Right, true),
-            CoreInputEvent::RightUp => Self::forward_btn(MouseButton::Right, false),
+            CoreInputEvent::LeftDown => forward_btn(MouseButton::Left, true, out),
+            CoreInputEvent::LeftUp => forward_btn(MouseButton::Left, false, out),
+            CoreInputEvent::RightDown => forward_btn(MouseButton::Right, true, out),
+            CoreInputEvent::RightUp => forward_btn(MouseButton::Right, false, out),
             CoreInputEvent::Motion { dx, dy } => {
-                vec![CoreAction::ForwardMotion { dx, dy }]
+                out.push(CoreAction::ForwardMotion { dx, dy });
             }
             CoreInputEvent::Wheel {
                 vertical,
                 horizontal,
             } => {
-                vec![CoreAction::ForwardWheel {
+                out.push(CoreAction::ForwardWheel {
                     vertical,
                     horizontal,
-                }]
+                });
             }
             CoreInputEvent::WheelHiRes {
                 vertical_units,
                 horizontal_units,
             } => {
-                vec![CoreAction::EmitWheelHiRes {
+                out.push(CoreAction::EmitWheelHiRes {
                     vertical_units,
                     horizontal_units,
-                }]
+                });
             }
-            CoreInputEvent::Tick { .. } => Vec::new(),
+            CoreInputEvent::Tick { .. } => {}
         }
     }
 
-    fn process_pending(&mut self, event: CoreInputEvent) -> Vec<CoreAction> {
+    fn process_pending(&mut self, event: CoreInputEvent, out: &mut Vec<CoreAction>) {
         match event {
-            CoreInputEvent::MiddleDown | CoreInputEvent::Tick { .. } => Vec::new(),
+            CoreInputEvent::MiddleDown | CoreInputEvent::Tick { .. } => {}
             CoreInputEvent::MiddleUp => {
-                let mut actions = Vec::new();
                 if self.config.replay_pending_motion_on_click {
-                    for (dx, dy) in self.pending_motion.drain(..) {
-                        actions.push(CoreAction::ForwardMotion { dx, dy });
+                    let (dx, dy) = self.pending_motion;
+                    if dx != 0 || dy != 0 {
+                        out.push(CoreAction::ForwardMotion { dx, dy });
                     }
                 }
-                actions.push(CoreAction::EmitMiddleClick);
+                out.push(CoreAction::EmitMiddleClick);
                 self.reset_to_idle();
-                actions
             }
-            CoreInputEvent::LeftDown => Self::forward_btn(MouseButton::Left, true),
-            CoreInputEvent::LeftUp => Self::forward_btn(MouseButton::Left, false),
-            CoreInputEvent::RightDown => Self::forward_btn(MouseButton::Right, true),
-            CoreInputEvent::RightUp => Self::forward_btn(MouseButton::Right, false),
+            CoreInputEvent::LeftDown => forward_btn(MouseButton::Left, true, out),
+            CoreInputEvent::LeftUp => forward_btn(MouseButton::Left, false, out),
+            CoreInputEvent::RightDown => forward_btn(MouseButton::Right, true, out),
+            CoreInputEvent::RightUp => forward_btn(MouseButton::Right, false, out),
             CoreInputEvent::Motion { dx, dy } => {
                 self.accumulate_offset(dx, dy);
 
                 let suppressed = self.config.suppress_motion_while_pending;
                 if self.config.replay_pending_motion_on_click && suppressed {
-                    self.pending_motion.push((dx, dy));
+                    self.pending_motion.0 = self.pending_motion.0.saturating_add(dx);
+                    self.pending_motion.1 = self.pending_motion.1.saturating_add(dy);
                 }
 
-                let mut actions = Vec::new();
                 if suppressed {
-                    actions.push(CoreAction::Suppress);
+                    out.push(CoreAction::Suppress);
                 } else {
-                    actions.push(CoreAction::ForwardMotion { dx, dy });
+                    out.push(CoreAction::ForwardMotion { dx, dy });
                 }
 
                 if self.crossed_deadzone() {
                     self.state = EngineState::Scrolling;
-                    self.pending_motion.clear();
-                    actions.push(CoreAction::EnterScrollMode);
+                    self.pending_motion = (0, 0);
+                    out.push(CoreAction::EnterScrollMode);
                 }
-                actions
             }
             CoreInputEvent::Wheel {
                 vertical,
                 horizontal,
             } => {
-                vec![CoreAction::ForwardWheel {
+                out.push(CoreAction::ForwardWheel {
                     vertical,
                     horizontal,
-                }]
+                });
             }
             CoreInputEvent::WheelHiRes {
                 vertical_units,
                 horizontal_units,
             } => {
-                vec![CoreAction::EmitWheelHiRes {
+                out.push(CoreAction::EmitWheelHiRes {
                     vertical_units,
                     horizontal_units,
-                }]
+                });
             }
         }
     }
 
-    fn process_scrolling(&mut self, event: CoreInputEvent) -> Vec<CoreAction> {
+    fn process_scrolling(&mut self, event: CoreInputEvent, out: &mut Vec<CoreAction>) {
         match event {
-            CoreInputEvent::MiddleDown => Vec::new(),
+            CoreInputEvent::MiddleDown => {}
             CoreInputEvent::MiddleUp => {
                 self.reset_to_idle();
-                vec![CoreAction::ExitScrollMode]
+                out.push(CoreAction::ExitScrollMode);
             }
-            CoreInputEvent::LeftDown => Self::forward_btn(MouseButton::Left, true),
-            CoreInputEvent::LeftUp => Self::forward_btn(MouseButton::Left, false),
-            CoreInputEvent::RightDown => Self::forward_btn(MouseButton::Right, true),
-            CoreInputEvent::RightUp => Self::forward_btn(MouseButton::Right, false),
+            CoreInputEvent::LeftDown => forward_btn(MouseButton::Left, true, out),
+            CoreInputEvent::LeftUp => forward_btn(MouseButton::Left, false, out),
+            CoreInputEvent::RightDown => forward_btn(MouseButton::Right, true, out),
+            CoreInputEvent::RightUp => forward_btn(MouseButton::Right, false, out),
             CoreInputEvent::Motion { dx, dy } => {
                 self.accumulate_offset(dx, dy);
                 if self.config.suppress_motion_while_scrolling {
-                    vec![CoreAction::Suppress]
+                    out.push(CoreAction::Suppress);
                 } else {
-                    vec![CoreAction::ForwardMotion { dx, dy }]
+                    out.push(CoreAction::ForwardMotion { dx, dy });
                 }
             }
             CoreInputEvent::Wheel {
                 vertical,
                 horizontal,
             } => {
-                vec![CoreAction::ForwardWheel {
+                out.push(CoreAction::ForwardWheel {
                     vertical,
                     horizontal,
-                }]
+                });
             }
             CoreInputEvent::WheelHiRes {
                 vertical_units,
                 horizontal_units,
             } => {
-                vec![CoreAction::EmitWheelHiRes {
+                out.push(CoreAction::EmitWheelHiRes {
                     vertical_units,
                     horizontal_units,
-                }]
+                });
             }
-            CoreInputEvent::Tick { dt_micros } => self.tick(dt_micros),
+            CoreInputEvent::Tick { dt_micros } => self.tick(dt_micros, out),
         }
     }
 
     fn reset_to_idle(&mut self) {
         self.state = EngineState::Idle;
         self.reset_offsets_and_accumulators();
-        self.pending_motion.clear();
+        self.pending_motion = (0, 0);
     }
 
     fn reset_offsets_and_accumulators(&mut self) {
@@ -227,18 +242,12 @@ impl Engine {
                 && self.offset_x_units.abs() > self.config.deadzone_units)
     }
 
-    fn forward_btn(button: MouseButton, pressed: bool) -> Vec<CoreAction> {
-        vec![CoreAction::ForwardMouseButton { button, pressed }]
-    }
-
-    fn tick(&mut self, dt_micros: u64) -> Vec<CoreAction> {
+    fn tick(&mut self, dt_micros: u64, out: &mut Vec<CoreAction>) {
         let dt_seconds = dt_micros as f64 / 1_000_000.0;
-        let mut actions = Vec::new();
-        self.tick_axis_vertical(dt_seconds, &mut actions);
+        self.tick_axis_vertical(dt_seconds, out);
         if self.config.horizontal_scroll {
-            self.tick_axis_horizontal(dt_seconds, &mut actions);
+            self.tick_axis_horizontal(dt_seconds, out);
         }
-        actions
     }
 
     fn tick_axis_vertical(&mut self, dt_seconds: f64, actions: &mut Vec<CoreAction>) {
@@ -261,12 +270,12 @@ impl Engine {
         if self.config.emit_legacy_wheel {
             self.detent_accumulator_y += delta_detents;
             let max = self.config.max_detents_per_tick;
-            for n in Self::drain_legacy_axis(&mut self.detent_accumulator_y, max) {
+            drain_legacy_axis(&mut self.detent_accumulator_y, max, |n| {
                 actions.push(CoreAction::EmitWheelDetents {
                     vertical: n,
                     horizontal: 0,
                 });
-            }
+            });
         }
         if self.config.emit_hires_wheel {
             self.hires_accumulator_y =
@@ -275,7 +284,7 @@ impl Engine {
                 .config
                 .max_detents_per_tick
                 .saturating_mul(HIRES_UNITS_PER_DETENT);
-            if let Some(n) = Self::drain_hires_axis(
+            if let Some(n) = drain_hires_axis(
                 &mut self.hires_accumulator_y,
                 max_units,
                 self.config.min_hires_units_per_event,
@@ -308,12 +317,12 @@ impl Engine {
         if self.config.emit_legacy_wheel {
             self.detent_accumulator_x += delta_detents;
             let max = self.config.max_detents_per_tick;
-            for n in Self::drain_legacy_axis(&mut self.detent_accumulator_x, max) {
+            drain_legacy_axis(&mut self.detent_accumulator_x, max, |n| {
                 actions.push(CoreAction::EmitWheelDetents {
                     vertical: 0,
                     horizontal: n,
                 });
-            }
+            });
         }
         if self.config.emit_hires_wheel {
             self.hires_accumulator_x =
@@ -322,7 +331,7 @@ impl Engine {
                 .config
                 .max_detents_per_tick
                 .saturating_mul(HIRES_UNITS_PER_DETENT);
-            if let Some(n) = Self::drain_hires_axis(
+            if let Some(n) = drain_hires_axis(
                 &mut self.hires_accumulator_x,
                 max_units,
                 self.config.min_hires_units_per_event,
@@ -335,6 +344,13 @@ impl Engine {
         }
     }
 
+    /// Speed for the given absolute distance from the press point.
+    ///
+    /// The default profile is the smooth progressive curve driven by
+    /// `min_speed_detents_per_second`, `max_speed_detents_per_second`,
+    /// `full_speed_units` and `acceleration_exponent`. When the user
+    /// configures `scroll_speed_steps`, the stepped profile takes over
+    /// (the last reached step controls the speed).
     fn compute_speed_detents_per_second(&self, distance: i32) -> f64 {
         if distance <= self.config.deadzone_units {
             return 0.0;
@@ -382,38 +398,40 @@ impl Engine {
             0
         }
     }
+}
 
-    fn drain_legacy_axis(accumulator: &mut f64, max: i32) -> Vec<i32> {
-        let mut out = Vec::new();
-        loop {
-            let raw = accumulator.trunc() as i32;
-            if raw == 0 {
-                break;
-            }
-            let n = raw.clamp(-max, max);
-            out.push(n);
-            *accumulator -= f64::from(n);
-            if n != raw {
-                *accumulator = 0.0;
-                break;
-            }
-        }
-        out
-    }
+fn forward_btn(button: MouseButton, pressed: bool, out: &mut Vec<CoreAction>) {
+    out.push(CoreAction::ForwardMouseButton { button, pressed });
+}
 
-    fn drain_hires_axis(accumulator: &mut f64, max_units: i32, min_units: i32) -> Option<i32> {
+fn drain_legacy_axis(accumulator: &mut f64, max: i32, mut emit: impl FnMut(i32)) {
+    loop {
         let raw = accumulator.trunc() as i32;
-        if raw.unsigned_abs() < min_units as u32 {
-            return None;
+        if raw == 0 {
+            break;
         }
-        let n = raw.clamp(-max_units, max_units);
-        if n == raw {
-            *accumulator -= f64::from(n);
-        } else {
+        let n = raw.clamp(-max, max);
+        emit(n);
+        *accumulator -= f64::from(n);
+        if n != raw {
             *accumulator = 0.0;
+            break;
         }
-        Some(n)
     }
+}
+
+fn drain_hires_axis(accumulator: &mut f64, max_units: i32, min_units: i32) -> Option<i32> {
+    let raw = accumulator.trunc() as i32;
+    if raw.unsigned_abs() < min_units as u32 {
+        return None;
+    }
+    let n = raw.clamp(-max_units, max_units);
+    if n == raw {
+        *accumulator -= f64::from(n);
+    } else {
+        *accumulator = 0.0;
+    }
+    Some(n)
 }
 
 const HIRES_UNITS_PER_DETENT: i32 = 120;

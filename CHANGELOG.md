@@ -7,6 +7,75 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-releases (`-beta.N`) are published as semver pre-releases, so a plain
 `cargo install wayland-wheeltani` keeps installing the latest **stable** release.
 
+## [1.3.2] - 2026-07-03
+
+### Changed
+
+- **Smooth progressive scroll is now the default speed profile.** The speed
+  interpolates continuously between `min_speed_detents_per_second` and
+  `max_speed_detents_per_second` as the pointer moves away from the press
+  point (shaped by `acceleration_exponent`, reaching max at
+  `full_speed_units` past the deadzone), instead of jumping between the five
+  built-in `scroll_speed_steps`. **Backward compatible**: config files that
+  define `[[scroll_speed_steps]]` keep the stepped profile with their exact
+  values — only installs that relied on the built-in default steps switch to
+  the smooth curve.
+- **Pending-motion replay is now bounded**: the tiny pointer drift replayed
+  before a short middle click (`replay_pending_motion_on_click`) is stored as
+  a compacted net delta instead of a list of every motion event, so a long
+  press can no longer grow memory without limit. The pointer ends up in the
+  same position; the replay is emitted as a single motion event.
+- **Hot input path no longer allocates per event**: the engine gained
+  `process_into(&mut Vec)`, the daemon reuses action/batch/uinput buffers
+  across events, and pending evdev events are dispatched straight from the
+  kernel buffer iterator instead of being collected into a `Vec` on every
+  wakeup — removing four heap allocations per forwarded motion event
+  (thousands per second on high-rate mice).
+
+### Fixed
+
+- **Hyprland/Sway providers now work under `systemd --user`**: socket discovery
+  no longer depends solely on `HYPRLAND_INSTANCE_SIGNATURE` / `SWAYSOCK`, which
+  are not exported to the service environment. When the variables are missing,
+  the runtime directories are scanned for the live compositor socket
+  (`$XDG_RUNTIME_DIR/hypr/*/.socket2.sock`, `$XDG_RUNTIME_DIR/sway-ipc.*.sock`),
+  so `provider = "auto"` and the explicit providers work in the recommended
+  service setup — previously only GNOME did.
+- **Hung helpers can no longer freeze a provider**: every helper subprocess
+  (`gdbus`, `kdotool`, the user's `command`) is now killed after a 5s timeout
+  instead of blocking its provider thread forever with a stale snapshot.
+- **Invalid wheel config is rejected at startup**: `emit_hires_wheel = false`
+  together with `emit_legacy_wheel = false` is now a validation error instead
+  of a silently dead autoscroll.
+
+### Changed (foreground providers)
+
+- **No provider is started when the filter is disabled** (the default): the
+  daemon previously auto-detected and ran a foreground provider — background
+  threads plus periodic `gdbus`/`kdotool` subprocess spawns — even with
+  `[foreground] enabled = false`.
+- **Sway provider is now event-driven in steady state**: the focused app is
+  taken from the container carried by each `window` event; the full `GET_TREE`
+  round-trip (new socket + full tree parse per focus change) only remains for
+  the initial sync and window-close resyncs. IPC payloads are also capped at
+  16 MiB so a corrupt stream cannot trigger an unbounded allocation.
+- **GNOME resync poll relaxed from 2s to 5s** (the low-latency path is the
+  `gdbus monitor` push stream), cutting the daemon's steady-state subprocess
+  churn by ~60%. Reconnect backoff for the GNOME monitor and the Hyprland
+  event stream now only resets once the stream actually delivers data,
+  preventing a spawn storm when a helper dies instantly.
+
+### Compatibility
+
+- Config files are fully compatible: every 1.3.x key keeps its meaning, and
+  explicit `[[scroll_speed_steps]]` entries preserve the stepped scroll
+  behaviour exactly. Installs that never configured steps move to the new
+  smooth progressive curve; add the previous default steps back (see
+  `examples/config.toml`) to restore the old feel.
+- The only newly rejected configuration is `emit_hires_wheel = false` combined
+  with `emit_legacy_wheel = false`, which previously produced a daemon that
+  scrolled nothing.
+
 ## [1.3.1] - 2026-07-01
 
 ### Added
@@ -283,6 +352,7 @@ live unplug/replug — no more editing `/dev/input/eventXX` paths.
 
 - README troubleshooting and installation steps clarified (udev rule setup).
 
+[1.3.2]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.2
 [1.3.1]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.1
 [1.3.0]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.0
 [1.3.0-beta.2]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.0-beta.2

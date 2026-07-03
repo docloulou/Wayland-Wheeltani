@@ -11,7 +11,7 @@
 //!
 //! Install `kdotool` with your distribution's package or `cargo install kdotool`.
 
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::sync::{Arc, RwLock};
 use std::thread;
 use std::time::Duration;
@@ -22,7 +22,9 @@ use crate::foreground::filter::{
     ForegroundApp, ForegroundProvider, ForegroundSnapshot, ForegroundSourceKind,
 };
 
-use super::{dbus_name_has_owner, read_snapshot, store, SharedSnapshot};
+use super::{
+    dbus_name_has_owner, read_snapshot, run_with_timeout, store, SharedSnapshot, HELPER_TIMEOUT,
+};
 
 /// `KWin`'s well-known session-bus name; present whenever a Plasma/`KWin`
 /// session is running and reachable from this process.
@@ -61,14 +63,10 @@ pub fn is_available() -> bool {
 
 fn kdotool_available() -> bool {
     // We only need to know the binary can be launched; `--help` exits 0 but we
-    // accept any successful spawn regardless of status (status() only errors when
+    // accept any successful run regardless of status (spawning only errors when
     // the binary is missing or cannot be executed).
-    Command::new("kdotool")
-        .arg("--help")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok()
+    run_with_timeout(Command::new("kdotool").arg("--help"), HELPER_TIMEOUT)
+        .is_ok_and(|out| out.is_some())
 }
 
 impl KdeProvider {
@@ -133,10 +131,12 @@ fn query_once() -> ForegroundSnapshot {
 }
 
 fn run_kdotool_class() -> Result<Option<String>, String> {
-    let out = Command::new("kdotool")
-        .args(["getactivewindow", "getwindowclassname"])
-        .output()
-        .map_err(|e| format!("failed to run kdotool: {e}"))?;
+    let out = run_with_timeout(
+        Command::new("kdotool").args(["getactivewindow", "getwindowclassname"]),
+        HELPER_TIMEOUT,
+    )
+    .map_err(|e| format!("failed to run kdotool: {e}"))?
+    .ok_or_else(|| "kdotool timed out (killed)".to_owned())?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         debug!(status = %out.status, stderr = %stderr.trim(), "kdotool exited unsuccessfully");

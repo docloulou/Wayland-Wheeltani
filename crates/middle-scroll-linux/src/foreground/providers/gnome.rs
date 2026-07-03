@@ -25,13 +25,19 @@ use crate::foreground::filter::{
     ForegroundApp, ForegroundProvider, ForegroundSnapshot, ForegroundSourceKind,
 };
 
-use super::{dbus_name_has_owner, json_to_app, read_snapshot, store, SharedSnapshot};
+use super::{
+    dbus_name_has_owner, json_to_app, read_snapshot, run_with_timeout, store, SharedSnapshot,
+    HELPER_TIMEOUT,
+};
 
 const BUS_NAME: &str = "org.docloulou.WheeltaniForeground";
 const OBJECT_PATH: &str = "/org/docloulou/WheeltaniForeground";
 const INTERFACE: &str = "org.docloulou.WheeltaniForeground";
 
-const RESYNC_INTERVAL: Duration = Duration::from_secs(2);
+/// Push updates arrive through `gdbus monitor`, so the resync poll only needs
+/// to catch a missed signal or the extension going away; 5s keeps that
+/// liveness check while spawning far fewer subprocesses than a tight poll.
+const RESYNC_INTERVAL: Duration = Duration::from_secs(5);
 const BACKOFF_START: Duration = Duration::from_millis(250);
 const BACKOFF_MAX: Duration = Duration::from_secs(2);
 
@@ -68,15 +74,11 @@ pub fn is_available() -> bool {
 fn gdbus_available() -> bool {
     // `gdbus` has no `--version`/`version` subcommand (those exit non-zero with
     // "Unknown command"). We only need to know the binary can be executed, so we
-    // spawn `gdbus help` (exit 0) and treat any successful spawn as available,
-    // regardless of the exit status. `status()` only errors when the binary is
+    // spawn `gdbus help` (exit 0) and treat any successful run as available,
+    // regardless of the exit status. Spawning only errors when the binary is
     // missing or cannot be launched.
-    Command::new("gdbus")
-        .arg("help")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok()
+    run_with_timeout(Command::new("gdbus").arg("help"), HELPER_TIMEOUT)
+        .is_ok_and(|out| out.is_some())
 }
 
 impl GnomeProvider {
@@ -149,9 +151,12 @@ fn monitor_loop(shared: &SharedSnapshot) {
             .spawn()
         {
             Ok(mut child) => {
-                backoff = BACKOFF_START;
                 if let Some(stdout) = child.stdout.take() {
                     for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                        // Only a monitor that actually produces output counts
+                        // as healthy; resetting on spawn alone would defeat
+                        // the backoff if gdbus exits immediately.
+                        backoff = BACKOFF_START;
                         if let Some(app) = parse_monitor_line(&line) {
                             store(shared, ForegroundSnapshot::Known(app));
                         }
@@ -179,8 +184,8 @@ fn resync_loop(shared: &SharedSnapshot) {
 }
 
 fn call_get_focused() -> Result<Option<ForegroundApp>, String> {
-    let out = Command::new("gdbus")
-        .args([
+    let out = run_with_timeout(
+        Command::new("gdbus").args([
             "call",
             "--session",
             "--dest",
@@ -189,9 +194,11 @@ fn call_get_focused() -> Result<Option<ForegroundApp>, String> {
             OBJECT_PATH,
             "--method",
             &format!("{INTERFACE}.GetFocused"),
-        ])
-        .output()
-        .map_err(|e| format!("failed to run gdbus: {e}"))?;
+        ]),
+        HELPER_TIMEOUT,
+    )
+    .map_err(|e| format!("failed to run gdbus: {e}"))?
+    .ok_or_else(|| "gdbus call timed out".to_owned())?;
     if !out.status.success() {
         return Err(format!(
             "gdbus call failed: {}",

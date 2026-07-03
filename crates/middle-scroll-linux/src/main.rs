@@ -73,6 +73,23 @@ mod linux {
     /// they want to identify before the snapshot is read.
     const DETECT_COUNTDOWN_SECS: u64 = 3;
 
+    /// Reusable buffers for the hot event path. Both are cleared and refilled
+    /// for every input event / tick, so keeping them alive across iterations
+    /// avoids two heap allocations per event.
+    struct Scratch {
+        actions: Vec<CoreAction>,
+        batch: Vec<CoreAction>,
+    }
+
+    impl Scratch {
+        fn new() -> Self {
+            Self {
+                actions: Vec::with_capacity(16),
+                batch: Vec::with_capacity(16),
+            }
+        }
+    }
+
     /// Why the inner event loop returned. The supervisor in `run_daemon` uses
     /// this to decide between shutting down and re-acquiring the device.
     enum LoopOutcome {
@@ -502,6 +519,7 @@ mod linux {
         let mut engine = Engine::new(cfg.core.clone());
         let mut last_state = engine.state();
         let mut foreground_gate = ForegroundGate::new(cfg.foreground.clone());
+        let mut scratch = Scratch::new();
 
         // Initial open is fatal: `run()` already waited for a `device_match` to
         // appear, so a failure here is a genuine setup problem.
@@ -526,6 +544,7 @@ mod linux {
                 cfg.dry_run,
                 &mut last_tick,
                 &mut last_state,
+                &mut scratch,
             );
 
             match outcome {
@@ -638,6 +657,7 @@ mod linux {
         dry_run: bool,
         last_tick: &mut Instant,
         last_state: &mut EngineState,
+        scratch: &mut Scratch,
     ) -> anyhow::Result<LoopOutcome> {
         loop {
             if shutdown.load(Ordering::SeqCst) {
@@ -688,6 +708,7 @@ mod linux {
                         foreground_gate,
                         dry_run,
                         last_state,
+                        scratch,
                     )?
                 {
                     return Ok(LoopOutcome::DeviceLost);
@@ -699,9 +720,14 @@ mod linux {
                 let dt = now.duration_since(*last_tick);
                 *last_tick = now;
                 let dt_us = dt.as_micros().min(u128::from(u64::MAX)) as u64;
-                let actions = engine.process(CoreInputEvent::Tick { dt_micros: dt_us });
+                scratch.actions.clear();
+                engine.process_into(
+                    CoreInputEvent::Tick { dt_micros: dt_us },
+                    &mut scratch.actions,
+                );
                 emit_actions(
-                    &actions,
+                    &scratch.actions,
+                    &mut scratch.batch,
                     virtual_mouse.as_deref_mut(),
                     dry_run,
                     indicator,
@@ -715,6 +741,7 @@ mod linux {
     /// Drains and dispatches pending input events. Returns `Ok(false)` when the
     /// read fails because the device disconnected, so the caller can switch to
     /// reconnecting instead of aborting the whole daemon.
+    #[allow(clippy::too_many_arguments)]
     fn process_pending_events(
         physical: &mut PhysicalMouse,
         mut virtual_mouse: Option<&mut VirtualMouse>,
@@ -723,9 +750,13 @@ mod linux {
         foreground_gate: &mut ForegroundGate,
         dry_run: bool,
         last_state: &mut EngineState,
+        scratch: &mut Scratch,
     ) -> anyhow::Result<bool> {
-        let events: Vec<evdev::InputEvent> = match physical.fetch_events() {
-            Ok(iter) => iter.collect(),
+        // Iterate the kernel buffer directly instead of collecting into a Vec:
+        // this path wakes up for every burst of motion events, so avoiding a
+        // heap allocation per wakeup matters.
+        let events = match physical.fetch_events() {
+            Ok(iter) => iter,
             Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(true),
             Err(err) => {
                 warn!(?err, "fetch_events failed; treating device as disconnected");
@@ -740,9 +771,11 @@ mod linux {
             match decision {
                 AutoscrollDecision::Enabled => match routed {
                     RoutedEvent::Core(core_event) => {
-                        let actions = engine.process(core_event);
+                        scratch.actions.clear();
+                        engine.process_into(core_event, &mut scratch.actions);
                         emit_actions(
-                            &actions,
+                            &scratch.actions,
+                            &mut scratch.batch,
                             virtual_mouse.as_deref_mut(),
                             dry_run,
                             indicator,
@@ -754,6 +787,7 @@ mod linux {
                         let action = CoreAction::ForwardMouseButton { button, pressed };
                         emit_actions(
                             std::slice::from_ref(&action),
+                            &mut scratch.batch,
                             virtual_mouse.as_deref_mut(),
                             dry_run,
                             indicator,
@@ -767,6 +801,7 @@ mod linux {
                     let actions = event_router::passthrough_actions(&routed);
                     emit_actions(
                         &actions,
+                        &mut scratch.batch,
                         virtual_mouse.as_deref_mut(),
                         dry_run,
                         indicator,
@@ -781,16 +816,17 @@ mod linux {
         Ok(true)
     }
 
-    #[allow(clippy::unnecessary_wraps)]
+    #[allow(clippy::unnecessary_wraps, clippy::too_many_arguments)]
     fn emit_actions(
         actions: &[CoreAction],
+        batch: &mut Vec<CoreAction>,
         mut virtual_mouse: Option<&mut VirtualMouse>,
         dry_run: bool,
         indicator: &mut dyn Indicator,
         engine: &Engine,
         last_state: &mut EngineState,
     ) -> anyhow::Result<()> {
-        let mut batch: Vec<CoreAction> = Vec::with_capacity(actions.len());
+        batch.clear();
 
         for action in actions {
             match action {
@@ -803,7 +839,7 @@ mod linux {
                     indicator.exit_scroll();
                 }
                 CoreAction::EmitMiddleClick => {
-                    flush_batch(&mut batch, virtual_mouse.as_deref_mut(), dry_run);
+                    flush_batch(batch, virtual_mouse.as_deref_mut(), dry_run);
                     debug!("EmitMiddleClick");
                     if dry_run {
                         info!("DRY-RUN action: EmitMiddleClick");
@@ -826,7 +862,7 @@ mod linux {
             }
         }
 
-        flush_batch(&mut batch, virtual_mouse, dry_run);
+        flush_batch(batch, virtual_mouse, dry_run);
 
         let new_state = engine.state();
         if new_state != *last_state {

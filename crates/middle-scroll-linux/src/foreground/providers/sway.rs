@@ -1,6 +1,13 @@
-//! Sway / i3 provider: subscribes to `window` events and resolves the focused
-//! node from `GET_TREE`. The tree is more reliable than individual events for
-//! reconstructing the current app across native-Wayland and `XWayland` windows.
+//! Sway / i3 provider: subscribes to `window` events and tracks the focused
+//! app from the container carried by each event, falling back to `GET_TREE`
+//! only when an event cannot identify the focused window (initial sync and
+//! window-close). This keeps the steady state at zero extra connections and
+//! zero tree parses per focus change.
+//!
+//! Socket discovery works even without `SWAYSOCK`/`I3SOCK`: those variables
+//! are set inside the compositor's children but are usually absent from a
+//! `systemd --user` service environment, so the runtime directory is scanned
+//! for a live `sway-ipc.*.sock` as a fallback.
 
 use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -22,6 +29,11 @@ const MAGIC: &[u8] = b"i3-ipc";
 const IPC_SUBSCRIBE: u32 = 2;
 const IPC_GET_TREE: u32 = 4;
 
+/// Upper bound on an IPC payload we are willing to buffer. Real `GET_TREE`
+/// payloads are well under a few megabytes; anything larger indicates a
+/// corrupt stream and must not translate into an unbounded allocation.
+const MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+
 const BACKOFF_START: Duration = Duration::from_millis(250);
 const BACKOFF_MAX: Duration = Duration::from_secs(2);
 
@@ -30,7 +42,8 @@ pub struct SwayProvider {
     shared: SharedSnapshot,
 }
 
-/// True when a Sway/i3 IPC socket is advertised and present.
+/// True when a Sway/i3 IPC socket is advertised (env var) or discoverable in
+/// the runtime directory.
 #[must_use]
 pub fn is_available() -> bool {
     socket_path().is_some_and(|p| p.exists())
@@ -44,7 +57,31 @@ fn socket_path() -> Option<PathBuf> {
             }
         }
     }
-    None
+    discover_sway_socket()
+}
+
+/// Scans `$XDG_RUNTIME_DIR` for `sway-ipc.<uid>.<pid>.sock` and returns the
+/// most recently created one (the live compositor). Needed when the daemon
+/// runs as a `systemd --user` service, where `SWAYSOCK` is not exported.
+fn discover_sway_socket() -> Option<PathBuf> {
+    let runtime = std::env::var("XDG_RUNTIME_DIR").ok().filter(|s| !s.is_empty())?;
+    let entries = std::fs::read_dir(runtime).ok()?;
+    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        // Sway hardcodes the lowercase `sway-ipc.<uid>.<pid>.sock` pattern.
+        #[allow(clippy::case_sensitive_file_extension_comparisons)]
+        if !(name.starts_with("sway-ipc.") && name.ends_with(".sock")) {
+            continue;
+        }
+        let Ok(meta) = entry.metadata() else { continue };
+        let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+        if best.as_ref().map_or(true, |(t, _)| modified > *t) {
+            best = Some((modified, entry.path()));
+        }
+    }
+    best.map(|(_, p)| p)
 }
 
 impl SwayProvider {
@@ -104,11 +141,56 @@ fn run_session(path: &Path, shared: &SharedSnapshot, backoff: &mut Duration) -> 
     let _ = read_msg(&mut sub)?; // subscribe acknowledgement
     *backoff = BACKOFF_START;
 
-    // Initialise from the current tree, then refresh on every window event.
+    // Initialise from the current tree, then track focus from the container
+    // carried by each event; the tree is only re-queried when an event cannot
+    // tell us who is focused now (e.g. the focused window closed).
     refresh(path, shared);
     loop {
-        let _ = read_msg(&mut sub)?;
-        refresh(path, shared);
+        let (_, payload) = read_msg(&mut sub)?;
+        match handle_window_event(&payload) {
+            EventOutcome::Update(app) => store(shared, ForegroundSnapshot::Known(app)),
+            EventOutcome::NeedsTreeRefresh => refresh(path, shared),
+            EventOutcome::Ignore => {}
+        }
+    }
+}
+
+/// What a `window` event tells us about the focused app.
+#[derive(Debug)]
+enum EventOutcome {
+    /// The event identifies the newly focused (or retitled focused) window.
+    Update(ForegroundApp),
+    /// The event invalidates the snapshot without naming a successor; the
+    /// tree must be queried (e.g. the focused window closed and focus may
+    /// have moved to nothing / another workspace).
+    NeedsTreeRefresh,
+    /// The event does not affect the focused app.
+    Ignore,
+}
+
+/// Interprets a `window` event payload (`{"change": ..., "container": ...}`).
+fn handle_window_event(payload: &[u8]) -> EventOutcome {
+    let Ok(event) = serde_json::from_slice::<Value>(payload) else {
+        // Unparseable payload: resync from the tree rather than going stale.
+        return EventOutcome::NeedsTreeRefresh;
+    };
+    let change = event.get("change").and_then(Value::as_str).unwrap_or("");
+    let container = event.get("container");
+    match change {
+        "focus" => container.map_or(EventOutcome::NeedsTreeRefresh, |c| {
+            EventOutcome::Update(node_to_app(c))
+        }),
+        // Title changes only matter for the currently focused window.
+        "title" => match container {
+            Some(c) if c.get("focused").and_then(Value::as_bool) == Some(true) => {
+                EventOutcome::Update(node_to_app(c))
+            }
+            _ => EventOutcome::Ignore,
+        },
+        // Closing a window can move focus without a matching focus event
+        // (e.g. the workspace becomes empty).
+        "close" => EventOutcome::NeedsTreeRefresh,
+        _ => EventOutcome::Ignore,
     }
 }
 
@@ -153,6 +235,12 @@ fn read_msg(stream: &mut UnixStream) -> io::Result<(u32, Vec<u8>)> {
     }
     let len = u32::from_ne_bytes([header[6], header[7], header[8], header[9]]) as usize;
     let msg_type = u32::from_ne_bytes([header[10], header[11], header[12], header[13]]);
+    if len > MAX_PAYLOAD_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "ipc payload too large",
+        ));
+    }
     let mut payload = vec![0u8; len];
     stream.read_exact(&mut payload)?;
     Ok((msg_type, payload))
@@ -249,6 +337,64 @@ mod tests {
             "nodes": [{"focused": false, "nodes": []}]
         });
         assert!(find_focused(&tree).is_none());
+    }
+
+    #[test]
+    fn focus_event_updates_from_container() {
+        let payload = serde_json::json!({
+            "change": "focus",
+            "container": {"app_id": "org.mozilla.firefox", "name": "Firefox", "pid": 42}
+        });
+        match handle_window_event(payload.to_string().as_bytes()) {
+            EventOutcome::Update(app) => {
+                assert_eq!(app.app_id.as_deref(), Some("org.mozilla.firefox"));
+                assert_eq!(app.pid, Some(42));
+            }
+            other => panic!("expected Update, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn title_event_only_updates_focused_container() {
+        let focused = serde_json::json!({
+            "change": "title",
+            "container": {"focused": true, "app_id": "code", "name": "new title"}
+        });
+        assert!(matches!(
+            handle_window_event(focused.to_string().as_bytes()),
+            EventOutcome::Update(_)
+        ));
+
+        let unfocused = serde_json::json!({
+            "change": "title",
+            "container": {"focused": false, "app_id": "code", "name": "bg"}
+        });
+        assert!(matches!(
+            handle_window_event(unfocused.to_string().as_bytes()),
+            EventOutcome::Ignore
+        ));
+    }
+
+    #[test]
+    fn close_event_forces_tree_refresh() {
+        let payload = serde_json::json!({"change": "close", "container": {"app_id": "mpv"}});
+        assert!(matches!(
+            handle_window_event(payload.to_string().as_bytes()),
+            EventOutcome::NeedsTreeRefresh
+        ));
+    }
+
+    #[test]
+    fn unrelated_and_invalid_events() {
+        let moved = serde_json::json!({"change": "move", "container": {}});
+        assert!(matches!(
+            handle_window_event(moved.to_string().as_bytes()),
+            EventOutcome::Ignore
+        ));
+        assert!(matches!(
+            handle_window_event(b"{not json"),
+            EventOutcome::NeedsTreeRefresh
+        ));
     }
 
     #[test]

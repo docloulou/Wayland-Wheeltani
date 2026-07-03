@@ -1,4 +1,4 @@
-use crate::config::{CoreConfig, SpeedStep};
+use crate::config::{ConfigError, CoreConfig, SpeedStep};
 use crate::engine::Engine;
 use crate::model::{CoreAction, CoreInputEvent, EngineState, MouseButton};
 
@@ -155,6 +155,16 @@ fn config_rejects_bad_min_hires_units_per_event() {
         };
         assert!(cfg.validate().is_err());
     }
+}
+
+#[test]
+fn config_rejects_no_wheel_emitter() {
+    let cfg = CoreConfig {
+        emit_hires_wheel: false,
+        emit_legacy_wheel: false,
+        ..CoreConfig::default()
+    };
+    assert_eq!(cfg.validate(), Err(ConfigError::NoWheelEmitter));
 }
 
 #[test]
@@ -443,7 +453,7 @@ fn motion_is_forwarded_when_suppress_disabled() {
 }
 
 #[test]
-fn replay_pending_motion_replays_on_short_click() {
+fn replay_pending_motion_replays_net_motion_on_short_click() {
     let cfg = CoreConfig {
         replay_pending_motion_on_click: true,
         ..CoreConfig::default()
@@ -455,6 +465,9 @@ fn replay_pending_motion_replays_on_short_click() {
     e.process(CoreInputEvent::Motion { dx: -1, dy: 2 });
     let release = e.process(CoreInputEvent::MiddleUp);
 
+    // The pending motion is replayed as a single compacted delta (the pointer
+    // ends up at the same place; storing every event would grow unboundedly
+    // during a long press).
     let forwarded: Vec<_> = release
         .iter()
         .filter_map(|a| match a {
@@ -462,8 +475,51 @@ fn replay_pending_motion_replays_on_short_click() {
             _ => None,
         })
         .collect();
-    assert_eq!(forwarded, vec![(2, 1), (-1, 2)]);
+    assert_eq!(forwarded, vec![(1, 3)]);
     assert!(release.contains(&CoreAction::EmitMiddleClick));
+}
+
+#[test]
+fn replay_pending_zero_net_motion_emits_no_motion() {
+    let cfg = CoreConfig {
+        replay_pending_motion_on_click: true,
+        ..CoreConfig::default()
+    };
+    let mut e = engine_with(cfg);
+
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 3, dy: -2 });
+    e.process(CoreInputEvent::Motion { dx: -3, dy: 2 });
+    let release = e.process(CoreInputEvent::MiddleUp);
+
+    assert!(!release
+        .iter()
+        .any(|a| matches!(a, CoreAction::ForwardMotion { .. })));
+    assert!(release.contains(&CoreAction::EmitMiddleClick));
+}
+
+#[test]
+fn default_profile_is_smooth_progressive_curve() {
+    // The default config must not carry speed steps: scrolling follows the
+    // continuous min/max curve, and speed grows strictly with distance.
+    let cfg = CoreConfig::default();
+    assert!(cfg.scroll_speed_steps.is_empty());
+
+    let mut e = engine_with(cfg.clone());
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 0, dy: 40 });
+    let near = count_hires(&run_for(&mut e, 1.0, 8_333));
+
+    let mut far = engine_with(cfg);
+    far.process(CoreInputEvent::MiddleDown);
+    far.process(CoreInputEvent::Motion { dx: 0, dy: 100 });
+    let far_units = count_hires(&run_for(&mut far, 1.0, 8_333));
+
+    assert!(near < 0 && far_units < 0, "downward motion scrolls down");
+    assert!(
+        far_units.abs() > near.abs(),
+        "speed must increase smoothly with distance ({far_units} vs {near})"
+    );
 }
 
 #[test]

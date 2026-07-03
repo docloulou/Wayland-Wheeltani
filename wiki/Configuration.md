@@ -118,9 +118,22 @@ journalctl --user -u wayland-wheeltani -f
 
 ## Scroll speed
 
-Scroll speed is configured by distance from the original middle-button press
-point. The same `[[scroll_speed_steps]]` apply to vertical and horizontal
-autoscroll:
+Scroll speed follows the distance from the original middle-button press point.
+By default (since 1.3.2) it is a **smooth progressive curve**: the speed
+interpolates continuously between `min_speed_detents_per_second` and
+`max_speed_detents_per_second`, reaching the maximum `full_speed_units` past
+the deadzone, shaped by `acceleration_exponent`:
+
+```toml
+min_speed_detents_per_second = 1.5
+max_speed_detents_per_second = 32.0
+full_speed_units = 120
+acceleration_exponent = 1.6   # 1.0 = linear, >1 = soft start
+```
+
+To use a **stepped profile** instead (the built-in default up to 1.3.1), define
+`[[scroll_speed_steps]]` entries; they replace the smooth curve, and the same
+steps apply to vertical and horizontal autoscroll:
 
 ```toml
 [[scroll_speed_steps]]
@@ -134,6 +147,7 @@ speed_detents_per_second = 10.0
 
 The last reached distance step wins. If the pointer is 90 units away from the
 press point on either axis, the example above scrolls at `10.0` detents/s.
+Existing config files that already define steps keep their exact behaviour.
 
 ## Other common options
 
