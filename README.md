@@ -1,6 +1,8 @@
 [![CodeQL](https://github.com/docloulou/Wayland-Wheeltani/actions/workflows/codeql.yml/badge.svg)](https://github.com/docloulou/Wayland-Wheeltani/actions/workflows/codeql.yml)
 [![License: 0BSD](https://img.shields.io/badge/license-0BSD-brightgreen.svg)](LICENSE)
 
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/W7W01LZHA2)
+
 # Wayland-Wheeltani
 
 Progressive middle-click autoscroll for Wayland.
