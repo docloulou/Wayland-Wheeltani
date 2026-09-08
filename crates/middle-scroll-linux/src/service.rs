@@ -135,6 +135,8 @@ fn render_user_service(exe: &Path, config_path: &Path) -> anyhow::Result<String>
     let config_dir = config_path
         .parent()
         .context("config path has no parent directory")?;
+    // kdotool creates scripts in /tmp for KWin outside the service sandbox.
+    // Keep /tmp shared and writable even with ProtectSystem=strict.
     Ok(format!(
         "[Unit]\n\
 Description=Progressive middle-button autoscroll daemon for Wayland\n\
@@ -147,11 +149,11 @@ Type=simple\n\
 ExecStart={} --no-interactive --config {}\n\
 Restart=on-failure\n\
 RestartSec=2\n\
-PrivateTmp=true\n\
+PrivateTmp=false\n\
 NoNewPrivileges=true\n\
 ProtectSystem=strict\n\
 ProtectHome=read-only\n\
-ReadWritePaths={}\n\
+ReadWritePaths={} /tmp\n\
 \n\
 [Install]\n\
 WantedBy=default.target\n",
@@ -215,7 +217,8 @@ mod tests {
         assert!(unit.contains(
             "ExecStart=\"/home/me/bin with spaces/wayland-wheeltani\" --no-interactive --config \"/home/me/config with spaces/config.toml\""
         ));
-        assert!(unit.contains("ReadWritePaths=\"/home/me/config with spaces\""));
+        assert!(unit.contains("\nPrivateTmp=false\n"));
+        assert!(unit.contains("\nReadWritePaths=\"/home/me/config with spaces\" /tmp\n"));
     }
 
     #[test]

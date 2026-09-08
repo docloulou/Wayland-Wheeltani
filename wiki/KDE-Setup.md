@@ -76,6 +76,21 @@ Copy the printed identifier into `deny_apps` / `allow_apps`.
   asks `kdotool` once; the decision itself is still taken at middle-button press
   using the latest polled value.
 
+## Troubleshooting the user service
+
+If `kdotool` works in a terminal but the foreground filter fails in the service,
+check whether you still have an older installed unit. `kdotool` writes temporary
+KWin scripts that must be writable by the service and visible to KWin in the
+desktop session. Generated units now use shared, writable `/tmp`:
+`PrivateTmp=false` keeps those scripts visible to KWin, and `/tmp` in
+`ReadWritePaths` makes them writable despite `ProtectSystem=strict`.
+`ProtectHome=read-only`, `NoNewPrivileges=true`, and config-directory write
+access are retained.
+
+Upgrading the binary alone leaves the old unit unchanged. Follow
+[Update an existing service](Installation#update-an-existing-service) to
+regenerate and restart it, preserving any custom `--config` path.
+
 ## Alternative: without kdotool (a KWin script)
 
 If you would rather not install `kdotool`, use the generic `command` provider
