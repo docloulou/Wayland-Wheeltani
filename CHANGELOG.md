@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Pre-releases (`-beta.N`) are published as semver pre-releases, so a plain
 `cargo install wayland-wheeltani` keeps installing the latest **stable** release.
 
+## [Unreleased]
+
+### Fixed
+
+- **KDE/kdotool temporary scripts work under the systemd sandbox**: generated
+  units and `contrib` service templates now share writable `/tmp` with KWin
+  (`PrivateTmp=false` and `/tmp` in `ReadWritePaths`), retaining the other
+  hardening settings. Existing installs must regenerate and restart their unit;
+  see [Update an existing service](wiki/Installation.md#update-an-existing-service).
+
 ## [1.3.2] - 2026-07-03
 
 ### Changed

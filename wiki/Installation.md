@@ -128,6 +128,25 @@ wayland-wheeltani --restart
 journalctl --user -u wayland-wheeltani -f
 ```
 
+### Update an existing service
+
+Upgrading the binary alone does not update an installed unit's sandbox settings.
+Neither `--start` nor `--restart` regenerates the unit. After upgrading, run
+these commands **without** `sudo` to regenerate it and apply it to the running
+service (`wlw` and `wayland-wheeltani` accept the same options):
+
+```bash
+wlw --install-service
+wlw --restart
+```
+
+If you originally installed with a custom config path, use
+`wlw --config "/absolute/path/to/config.toml" --install-service` **instead of**
+the first command, preserving that original path; then run `wlw --restart`.
+
+`--install-service` rewrites the unit, reloads systemd, and enables/starts the
+service, but an already running service needs the explicit restart afterward.
+
 ## Uninstall
 
 ```bash

@@ -9,11 +9,12 @@ Type=simple
 ExecStart=%h/.local/bin/wayland-wheeltani --no-interactive --config %h/.config/Wayland-Wheeltani/config.toml
 Restart=on-failure
 RestartSec=2
-PrivateTmp=true
+# kdotool scripts must be shared with KWin and writable under ProtectSystem=strict.
+PrivateTmp=false
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
-ReadWritePaths=%h/.config/Wayland-Wheeltani
+ReadWritePaths=%h/.config/Wayland-Wheeltani /tmp
 
 [Install]
 WantedBy=default.target
