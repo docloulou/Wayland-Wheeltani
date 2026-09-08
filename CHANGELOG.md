@@ -9,6 +9,8 @@ Pre-releases (`-beta.N`) are published as semver pre-releases, so a plain
 
 ## [Unreleased]
 
+## [1.3.3] - 2026-09-08
+
 ### Fixed
 
 - **KDE/kdotool temporary scripts work under the systemd sandbox**: generated
@@ -362,6 +364,7 @@ live unplug/replug — no more editing `/dev/input/eventXX` paths.
 
 - README troubleshooting and installation steps clarified (udev rule setup).
 
+[1.3.3]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.3
 [1.3.2]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.2
 [1.3.1]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.1
 [1.3.0]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.0
