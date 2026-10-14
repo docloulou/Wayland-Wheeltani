@@ -1,16 +1,20 @@
-### EXAMPLE udev rule. Do NOT install blindly. Read SECURITY in README.md first.
-### Replace the vendor/product placeholders with your physical mouse IDs.
-### The rule uses TAG+="uaccess" so the active desktop user can run the daemon
-### without sudo, instead of granting broad access via the input group.
-
+### EXAMPLE udev rule. Prefer `sudo wayland-wheeltani --install-udev-rule`,
+### which writes this file with your configured mice filled in.
+### Read SECURITY in README.md before installing it by hand.
+###
+### Replace REPLACE_VENDOR_ID / REPLACE_PRODUCT_ID with your mouse's USB ids as
+### four lowercase hex digits (`wayland-wheeltani --list-devices` shows them,
+### e.g. 046d:c539). Add one line per mouse.
+###
+### TAG+="uaccess" gives the logged-in desktop user access to the matching
+### nodes only, instead of granting broad access through the input group.
 ACTION!="add|change", GOTO="wayland_wheeltani_end"
 
-KERNEL=="uinput", MODE="0600", TAG+="uaccess"
+KERNEL=="uinput", SUBSYSTEM=="misc", TAG+="uaccess", OPTIONS+="static_node=uinput"
 
-KERNEL=="event[0-9]*", \
-    SUBSYSTEM=="input", \
-    ATTRS{idVendor}=="REPLACE_VENDOR_ID", \
-    ATTRS{idProduct}=="REPLACE_PRODUCT_ID", \
-    MODE="0600", TAG+="uaccess"
+# Only pointer nodes are opened to the user: the keyboard interface of a
+# combined receiver (same vendor/product ids) keeps its default root-only
+# permissions. ATTRS{id/*} matches both USB and Bluetooth mice.
+KERNEL=="event[0-9]*", SUBSYSTEM=="input", ENV{ID_INPUT_MOUSE}=="1", ENV{ID_INPUT_KEYBOARD}!="1", ATTRS{id/vendor}=="REPLACE_VENDOR_ID", ATTRS{id/product}=="REPLACE_PRODUCT_ID", TAG+="uaccess"
 
 LABEL="wayland_wheeltani_end"

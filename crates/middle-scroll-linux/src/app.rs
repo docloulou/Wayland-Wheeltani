@@ -26,14 +26,14 @@ pub fn run(bin_name: &'static str) -> anyhow::Result<()> {
 
     if let Some(shell) = args.completions {
         let mut command = Args::command_for(bin_name);
-        clap_complete::generate(shell, &mut command, bin_name, &mut io::stdout());
-        return Ok(());
+        let mut script = Vec::new();
+        clap_complete::generate(shell, &mut command, bin_name, &mut script);
+        return write_stdout(&script).context("failed to write the completion script");
     }
     if args.man {
-        clap_mangen::Man::new(Args::command_for(bin_name))
-            .render(&mut io::stdout())
-            .context("failed to write the man page")?;
-        return Ok(());
+        let mut page = Vec::new();
+        clap_mangen::Man::new(Args::command_for(bin_name)).render(&mut page)?;
+        return write_stdout(&page).context("failed to write the man page");
     }
 
     init_tracing(&args);
@@ -110,6 +110,16 @@ pub fn run(bin_name: &'static str) -> anyhow::Result<()> {
     }
 
     daemon::run(&args, resolved)
+}
+
+/// Writes generated text to stdout. A reader that stops early
+/// (`--man | head`) closes the pipe; that is not an error.
+fn write_stdout(bytes: &[u8]) -> io::Result<()> {
+    let mut out = io::stdout().lock();
+    match out.write_all(bytes).and_then(|()| out.flush()) {
+        Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        other => other,
+    }
 }
 
 /// The mouse is (re)chosen with `--setup`, on first run, and when
