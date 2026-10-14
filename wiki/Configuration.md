@@ -295,6 +295,10 @@ the mouse right away. `save` writes the changed keys to the config file and
 keeps its comments; `reload` drops unsaved changes; `quit` leaves the changes
 live until the next reload. `help` lists the commands and the useful keys.
 
+`get` and `set` show the top-level value, the one `save` writes. When the
+profile of the last gesture overrides that key, the reply also shows the value
+the profile uses, which stays in effect for its applications.
+
 ## Indicator hooks
 
 There is no built-in on-screen indicator: Wayland gives no portable way to draw

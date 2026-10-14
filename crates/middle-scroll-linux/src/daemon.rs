@@ -614,6 +614,8 @@ impl Output {
 #[derive(Debug)]
 struct ConfigWatcher {
     inotify: Inotify,
+    /// The config file this watcher was set up for.
+    path: PathBuf,
     file_name: OsString,
 }
 
@@ -635,7 +637,11 @@ impl ConfigWatcher {
                 AddWatchFlags::IN_CLOSE_WRITE | AddWatchFlags::IN_MOVED_TO,
             )
             .map_err(|err| format!("{}: {err}", dir.display()))?;
-        Ok(Self { inotify, file_name })
+        Ok(Self {
+            inotify,
+            path: path.to_owned(),
+            file_name,
+        })
     }
 
     /// Consumes the pending events; true when one concerns the config file.
@@ -1187,8 +1193,14 @@ impl<'a> Daemon<'a> {
             .config_path
             .as_deref()
             .filter(|_| self.cfg.watch_config);
-        match (watch, self.watcher.is_some()) {
-            (Some(path), false) => match ConfigWatcher::new(path) {
+        // A reload can resolve another file, e.g. once the legacy config
+        // directory has been migrated.
+        if self.watcher.as_ref().map(|w| w.path.as_path()) == watch {
+            return;
+        }
+        self.watcher = None;
+        if let Some(path) = watch {
+            match ConfigWatcher::new(path) {
                 Ok(watcher) => {
                     debug!(path = %path.display(), "watching the config file");
                     self.watcher = Some(watcher);
@@ -1196,9 +1208,7 @@ impl<'a> Daemon<'a> {
                 Err(err) => {
                     info!(%err, "not watching the config file; send SIGHUP or run --reload after editing it");
                 }
-            },
-            (None, true) => self.watcher = None,
-            _ => {}
+            }
         }
     }
 
@@ -1312,7 +1322,7 @@ impl<'a> Daemon<'a> {
         if let Some(key) = key {
             return table.get(key).map_or_else(
                 || format!("error: unknown setting `{key}`"),
-                |value| format!("ok {key} = {value}"),
+                |value| format!("ok {key} = {value}{}", self.profile_note(key)),
             );
         }
         let mut text = match toml::to_string(&table) {
@@ -1357,7 +1367,25 @@ impl<'a> Daemon<'a> {
             .ok()
             .and_then(|table| table.get(key).map(ToString::to_string))
             .unwrap_or_else(|| value.to_owned());
-        Ok(format!("ok {key} = {shown}"))
+        Ok(format!("ok {key} = {shown}{}", self.profile_note(key)))
+    }
+
+    /// `get` and `set` show the top-level value, the one `save` writes. When
+    /// the active profile overrides `key`, this notes the value it uses.
+    fn profile_note(&self, key: &str) -> String {
+        let Some(profile) = self.active_profile.and_then(|i| self.cfg.profiles.get(i)) else {
+            return String::new();
+        };
+        let overridden = toml::Table::try_from(&profile.overrides)
+            .is_ok_and(|overrides| overrides.contains_key(key));
+        if !overridden {
+            return String::new();
+        }
+        toml::Table::try_from(&profile.core)
+            .ok()
+            .and_then(|table| table.get(key).cloned())
+            .map(|value| format!("  # profile `{}` is active and uses {value}", profile.name))
+            .unwrap_or_default()
     }
 
     fn save(&mut self) -> String {
@@ -1749,6 +1777,69 @@ mod tests {
         std::fs::write(&cfg.path, "deadzone_units = \"nope\"\n").unwrap();
         assert!(d.execute(Command::Reload).starts_with("error:"));
         assert_eq!(d.engine.config().deadzone_units, 9);
+    }
+
+    #[test]
+    fn get_and_set_note_the_value_of_the_active_profile() {
+        let cfg = TempConfig::new(
+            "tune-profile",
+            "[[profiles]]\nname = \"browser\"\napps = [\"firefox\"]\nmax_speed_detents_per_second = 50.0\n",
+        );
+        let args = cfg.args();
+        let mut d = daemon(&args, focused("firefox"));
+        let get = |key: &str| Command::Get(Some(key.to_owned()));
+        assert_eq!(
+            d.execute(get("max_speed_detents_per_second")),
+            "ok max_speed_detents_per_second = 32.0"
+        );
+
+        feed(
+            &mut d,
+            &[
+                key(KeyCode::BTN_MIDDLE, true),
+                key(KeyCode::BTN_MIDDLE, false),
+            ],
+        );
+        assert_eq!(d.active_profile, Some(0));
+        assert_eq!(
+            d.execute(get("max_speed_detents_per_second")),
+            "ok max_speed_detents_per_second = 32.0  # profile `browser` is active and uses 50.0"
+        );
+        assert_eq!(d.execute(get("deadzone_units")), "ok deadzone_units = 10");
+        assert_eq!(
+            d.execute(Command::Set {
+                key: "max_speed_detents_per_second".to_owned(),
+                value: "40".to_owned(),
+            }),
+            "ok max_speed_detents_per_second = 40.0  # profile `browser` is active and uses 50.0"
+        );
+        assert!((d.engine.config().max_speed_detents_per_second - 50.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn watcher_follows_the_config_path() {
+        let first = TempConfig::new("watch-first", "");
+        let second = TempConfig::new("watch-second", "");
+        let args = first.args();
+        let mut d = daemon(&args, focused("firefox"));
+        d.cfg.control_socket = false;
+        let watched = |d: &Daemon<'_>| d.watcher.as_ref().map(|w| w.path.clone());
+
+        d.sync_services();
+        assert_eq!(watched(&d), Some(first.path.clone()));
+
+        d.cfg.config_path = Some(second.path.clone());
+        d.sync_services();
+        assert_eq!(watched(&d), Some(second.path.clone()));
+        std::fs::write(&second.path, "deadzone_units = 7\n").unwrap();
+        assert!(d
+            .watcher
+            .as_ref()
+            .is_some_and(ConfigWatcher::config_changed));
+
+        d.cfg.watch_config = false;
+        d.sync_services();
+        assert!(d.watcher.is_none());
     }
 
     #[test]
