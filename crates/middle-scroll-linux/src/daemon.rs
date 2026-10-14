@@ -1705,6 +1705,11 @@ mod tests {
             d.execute(set("mode", "toggle_progressive")),
             "ok mode = \"toggle_progressive\""
         );
+        // `--tune` users type whole numbers for speeds.
+        assert_eq!(
+            d.execute(set("max_speed_detents_per_second", "40")),
+            "ok max_speed_detents_per_second = 40.0"
+        );
 
         assert!(d.execute(set("no_such_key", "1")).starts_with("error:"));
         assert!(d

@@ -17,7 +17,7 @@ deny_apps = ["org.kde.dolphin", "firefox"]
 command_refresh_ms = 500
 ```
 
-This is the tested path. The daemon asks kdotool for the focused window's
+This is the preferred path. The daemon asks kdotool for the focused window's
 class **and title** in one call (`getactivewindow getwindowclassname
 getwindowname`), so `match_title = true` works on KDE too; a kdotool too old
 to chain both falls back to the class alone. See the
@@ -28,7 +28,7 @@ Why polling and not a push-based KWin script? A KWin script can watch
 D-Bus call, and receiving that call needs a D-Bus service inside the daemon.
 The project deliberately uses no D-Bus crate (it only shells out to `gdbus`),
 so the daemon polls instead; the decision is still taken once per
-middle-button press, from the latest poll.
+trigger press, from the latest poll.
 
 ## 2. No extra binary: `command` provider + a KWin script
 
@@ -78,7 +78,7 @@ line arrives, and the daemon then treats the window as unknown.
   path (option 1) is preferred.
 - Needs `qdbus6` (or `qdbus`) and `journalctl` (systemd), KDE Plasma 6.
 - Journal scraping adds latency; the daemon polls it every `command_refresh_ms`
-  (the decision itself is taken once at middle-button press).
+  (the decision itself is taken once at trigger press).
 
 ## Finding an app's identifier
 

@@ -1248,6 +1248,47 @@ mod tests {
         cleanup(&path);
     }
 
+    const EXAMPLE_CONFIG: &str = include_str!("../../../examples/config.toml");
+
+    /// The example says its values are the defaults; keep it honest.
+    #[test]
+    fn example_config_shows_the_defaults() {
+        let path = write_config("example", EXAMPLE_CONFIG);
+        let resolved = resolve(&args_with_config(&path)).unwrap();
+        assert_eq!(resolved, ResolvedConfig::defaults(Some(path.clone())));
+        cleanup(&path);
+    }
+
+    /// The commented `[[profiles]]` and `[hooks]` examples parse once
+    /// uncommented (the Waybar variant would repeat `on_enter`).
+    #[test]
+    fn example_profiles_and_hooks_parse() {
+        let start = EXAMPLE_CONFIG.find("# [[profiles]]").unwrap();
+        let end = EXAMPLE_CONFIG.find("# Waybar").unwrap();
+        let looks_like_toml = |line: &str| {
+            line.starts_with('[')
+                || line
+                    .split_once(" = ")
+                    .is_some_and(|(key, _)| key.chars().all(|c| c.is_ascii_lowercase() || c == '_'))
+        };
+        let uncommented: String = EXAMPLE_CONFIG[start..end]
+            .lines()
+            .map(|line| match line.strip_prefix("# ") {
+                Some(rest) if looks_like_toml(rest) => rest,
+                _ => line,
+            })
+            .flat_map(|line| [line, "\n"])
+            .collect();
+        let path = write_config("example-tables", &uncommented);
+        let resolved = resolve(&args_with_config(&path)).unwrap();
+        let names: Vec<_> = resolved.profiles.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["browsers", "code"]);
+        assert!(resolved.profiles[0].core.inertia);
+        assert_eq!(resolved.hooks.on_enter[0], "notify-send");
+        assert_eq!(resolved.hooks.on_resume.len(), 2);
+        cleanup(&path);
+    }
+
     #[test]
     fn resolve_parses_device_match_block() {
         let path = write_config(

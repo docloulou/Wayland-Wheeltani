@@ -6,8 +6,10 @@ publishes the focused window on the session bus, and the daemon reads it through
 `gdbus` (a low-latency `gdbus monitor` push path plus a periodic resync).
 
 This is only needed if you use the **[Foreground filter](Foreground-Filter)**
-with `provider = "gnome"` (or `provider = "auto"` on GNOME). Plain autoscroll
-does not require it.
+or per-application `[[profiles]]` with `provider = "gnome"` (or
+`provider = "auto"` on GNOME). Plain autoscroll does not require it.
+
+The extension supports GNOME Shell 45 to 50.
 
 ## Install the extension
 
@@ -23,6 +25,14 @@ gnome-extensions enable wheeltani-foreground@docloulou.github.io
 
 After it is enabled, `provider = "auto"` detects GNOME automatically, or set
 `provider = "gnome"` explicitly.
+
+### Upgrading the extension
+
+Version 2 of the extension also announces title changes (a browser switching
+tabs, an editor opening another file), so `match_title` rules follow them
+without waiting for the periodic resync. Re-run `integrations/gnome/install.sh`
+from the new release, then log out and back in. `gnome-extensions info
+wheeltani-foreground@docloulou.github.io` shows the installed version.
 
 ## Verify it works
 
@@ -62,7 +72,9 @@ wayland-wheeltani --detect-foreground
   `gdbus`/ownership failures.
 - Detection does **not** depend on `XDG_CURRENT_DESKTOP`; it checks whether the
   extension's bus name is owned, so it works even when the service environment
-  does not export desktop variables.
+  does not export desktop variables. If the service starts before GNOME Shell
+  has loaded the extension, `provider = "auto"` keeps checking in the background
+  and switches to GNOME as soon as the extension appears.
 - See
   [`integrations/gnome/README.md`](https://github.com/docloulou/Wayland-Wheeltani/blob/main/integrations/gnome/README.md)
   for the full D-Bus API and privacy notes.

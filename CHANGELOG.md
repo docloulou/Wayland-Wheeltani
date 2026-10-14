@@ -9,6 +9,89 @@ Pre-releases (`-beta.N`) are published as semver pre-releases, so a plain
 
 ## [Unreleased]
 
+### Added
+
+- **Control a running daemon**: `--status`, `--pause`, `--resume`, `--toggle`
+  and `--reload` talk to it over `$XDG_RUNTIME_DIR/wayland-wheeltani/control.sock`
+  (`control_socket = false` turns the socket off). Bind `wlw --toggle` to a
+  keyboard shortcut to switch autoscroll off for a while.
+- **Live tuning**: `--tune` opens a prompt that changes speed, deadzone, mode,
+  inertia... in the running daemon and saves them to the config file.
+- **Hot reload**: the config is reloaded when the file changes
+  (`watch_config`), on `SIGHUP` (`systemctl --user reload`) and on `--reload`.
+  An invalid file is reported and the running settings are kept.
+- **Per-application `[[profiles]]`**: engine settings that apply while one of
+  their `apps` is focused, on top of the top-level ones.
+- **Toggle mode**: `mode = "toggle_progressive"` latches scroll mode on a
+  short click; the next click ends it.
+- **`trigger_button`**: start autoscroll with the side, extra, forward, back or
+  task button instead of the middle one.
+- **`axis_lock`** (`off`, `dominant`, `first`) and **kinetic scrolling**
+  (`inertia`, `inertia_half_life_ms`).
+- **Several mice**: repeat `[[device_match]]`; `--add-device` appends one.
+- **Indicator `[hooks]`**: commands run when autoscroll starts or stops and
+  when the daemon is paused or resumed, with `WHEELTANI_STATE` set.
+- **`--completions <shell>` and `--man`** for both binaries; release archives
+  and packages ship them.
+- **Packaging**: an Arch `PKGBUILD`, cargo-deb and cargo-generate-rpm metadata,
+  a packaged systemd user unit and a Nix flake; see `packaging/README.md`.
+- **CI** runs fmt, clippy, the tests (stable and MSRV) and shellcheck on every
+  pull request. End-to-end uinput tests can be run as root with
+  `cargo test -p wayland-wheeltani --test uinput -- --ignored`.
+
+### Changed
+
+- **Every button and axis of the mouse is passed through** while it is
+  grabbed: extra buttons (`BTN_TASK`, `0x118`-`0x11f`), extra wheels and keys
+  are no longer dropped.
+- **Motion is forwarded one kernel frame at a time**, so a diagonal move
+  stays one move for libinput's pointer acceleration.
+- **No idle wakeups**: the daemon sleeps until input arrives instead of
+  waking 120 times per second.
+- **`--setup` and `--tune` keep the comments and layout** of `config.toml`.
+- `wayland-wheeltani` and `wlw` are two small binaries over one library.
+- The release workflow tests the code before building, checks that the tag
+  matches `Cargo.toml`, pins Zig and no longer expands its input inside
+  scripts.
+
+### Fixed
+
+- **`wlw` logged nothing**, even with `-vv`, so a service installed with it
+  had an empty journal.
+- **The foreground filter stayed off for the whole session** when the service
+  started before the compositor or the GNOME extension: `auto` now keeps
+  detecting in the background.
+- **GNOME 49 and 50** are accepted by the Shell extension (v2), which also
+  publishes title changes. A slow resync can no longer overwrite a newer focus.
+- **Mice without a hi-res wheel** scroll again: each detent is also sent as
+  120 hi-res units.
+- **Helper commands could hang** on a large output or a child that kept the
+  pipe open; their output is read while they run and the whole process group
+  is killed on timeout.
+- **Hyprland and Sway**: no focused window is reported as unknown (so
+  `unknown_policy` applies) instead of an app with empty fields; Sway follows
+  workspace switches; Hyprland reads the active window when it connects.
+- **KDE**: the window title is read through `kdotool`, and the KWin helper
+  script no longer returns an empty or stale answer.
+- **Reversing the scroll direction** no longer has to pay back the remainder
+  accumulated in the other direction.
+- `safety_timeout_seconds` also fires while waiting for the mouse to come back.
+- Files and directories written under `sudo` belong to the invoking user,
+  not root.
+- `--man | head` and `--completions bash | head` no longer fail.
+- The `contrib` user unit, the example config and the docs pointed at the old
+  `~/.config/Wayland-Wheeltani/` directory instead of
+  `~/.config/wayland-wheeltani/`.
+
+### Security
+
+- **The udev rule no longer gives access to keyboards.** It used to match the
+  USB id of a wireless receiver, which also covers the paired keyboard and the
+  keyboard interface of gaming mice, so any program run by the user could read
+  keystrokes. It now only matches pointer nodes and only adds `uaccess`
+  (members of `input` keep their access). Re-run
+  `sudo wayland-wheeltani --install-udev-rule` to replace an existing rule.
+
 ## [1.3.3] - 2026-09-08
 
 ### Fixed

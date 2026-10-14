@@ -44,7 +44,7 @@ You should get a `('{...}',)` tuple describing the focused window.
 
 ## Use it
 
-In your Wayland-Wheeltani config (`~/.config/Wayland-Wheeltani/config.toml`):
+In your Wayland-Wheeltani config (`~/.config/wayland-wheeltani/config.toml`):
 
 ```toml
 [foreground]

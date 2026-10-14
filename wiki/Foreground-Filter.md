@@ -5,6 +5,10 @@ keep the native middle-click in a browser, Steam or Blender while keeping
 progressive autoscroll everywhere else. This is **off by default**; an
 unconfigured daemon behaves exactly as before.
 
+The same focused-window detection also selects **[per-application
+profiles](#per-application-profiles)**: different speeds, mode or inertia for
+some applications.
+
 ## Quick start
 
 Add an optional `[foreground]` table to your config:
@@ -28,15 +32,17 @@ Not sure what to put in the lists? Use **[`--detect-foreground`](#finding-an-app
   forwards the mouse events untouched, so the middle click, middle-drag and the
   wheel keep working normally there. (Because the daemon grabs the device, it
   re-emits the events on the virtual mouse instead of dropping them.)
-- The decision is taken **once at middle-button press and held until release**,
-  so changing focus mid-scroll never leaves a button stuck or a scroll
-  half-done. It is also cleared on a physical-device hot-reconnect.
+- The decision is taken **once when the trigger button goes down and held until
+  the gesture ends**, so changing focus mid-scroll never leaves a button stuck
+  or a scroll half-done. It is also cleared on a physical-device hot-reconnect.
 - Matching is **case-insensitive** against `app_id`, `class` and
   `resource_class` (a trailing `.desktop` is ignored). The title is matched only
   with `match_title = true`.
 - `unknown_policy = "enabled"` (default) keeps autoscroll on when the focused app
   is unknown, so a missing provider never breaks your setup. Set it to
   `"disabled"` to pass events through whenever the app cannot be determined.
+  No focused window at all (an empty workspace on Hyprland or Sway) counts as
+  unknown, not as an application with an empty name.
 
 ## Providers and `provider = "auto"`
 
@@ -54,6 +60,14 @@ Not sure what to put in the lists? Use **[`--detect-foreground`](#finding-an-app
 Detection relies on the **session bus / compositor sockets**, not on desktop
 environment variables, so it works from a `systemd --user` service even when
 `XDG_CURRENT_DESKTOP` is not exported.
+
+The user service can start before the compositor is ready (Hyprland or Sway
+started without uwsm, GNOME Shell still loading its extensions). When `auto`
+finds nothing at startup, it keeps trying in the background (every 0.5 s at
+first, then up to every 10 s) and switches to the first provider that appears;
+until then the focused app is unknown. The journal shows
+`no compositor detected yet; retrying in the background`, then
+`foreground provider selected: … (auto)`.
 
 > **Tested providers:** so far only **gnome** has been verified by the author.
 > The `hyprland`, `sway`/i3, `kde` and `command` providers are implemented but
@@ -91,6 +105,40 @@ wayland-wheeltani --detect-foreground
 > `org.mozilla.firefox`), while an XWayland app exposes a WM
 > `class`/`resource_class` (e.g. `firefox`). When in doubt, list both spellings.
 
+## Per-application profiles
+
+A `[[profiles]]` entry changes the scroll settings while one of its `apps` is
+focused. Every key not set in the profile comes from the top level of the file,
+and the first profile that matches wins:
+
+```toml
+[[profiles]]
+name = "browsers"
+apps = ["firefox", "org.mozilla.firefox", "chromium"]
+max_speed_detents_per_second = 48.0
+inertia = true
+
+[[profiles]]
+name = "code"
+apps = ["code", "dev.zed.Zed"]
+mode = "toggle_progressive"
+axis_lock = "dominant"
+```
+
+- A profile accepts every scroll key of the top level (`mode`, speeds and
+  curve, `deadzone_units`, `invert_*`, `horizontal_scroll`, `axis_lock`,
+  `inertia`, …) but not the daemon keys (`device_match`, `trigger_button`,
+  `grab`, `[foreground]`, `[hooks]`).
+- `apps` is matched like `deny_apps`. Add `match_title = true` to a profile to
+  also match the window title; without it the profile follows
+  `[foreground].match_title`.
+- Profiles work whether `[foreground] enabled` is true or false: they only need
+  a provider (`provider = "auto"` by default). A denied application stays
+  denied whatever its profile says.
+- The profile is chosen when the trigger button goes down, like the filter
+  decision, and kept for the whole gesture. `wayland-wheeltani --status` shows
+  the profile of the last gesture.
+
 ## GNOME
 
 GNOME (Wayland) has no portable focused-window API, so the `gnome` provider uses
@@ -112,7 +160,8 @@ deny_apps = ["firefox", "org.kde.dolphin"]
 command_refresh_ms = 500   # how often the active window is polled
 ```
 
-See **[KDE setup](KDE-Setup)** for installing `kdotool` and verifying it.
+The provider reports the window class and title, so `match_title` works on
+KDE. See **[KDE setup](KDE-Setup)** for installing `kdotool` and verifying it.
 
 ## Other compositors (`command` provider)
 

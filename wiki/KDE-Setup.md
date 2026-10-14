@@ -47,8 +47,9 @@ KWin — in that case set `provider = "kde"` explicitly.
 Check that `kdotool` resolves the active window (focus another window first):
 
 ```bash
-kdotool getactivewindow getwindowclassname
-# e.g. -> org.kde.dolphin   (or firefox for an X/XWayland app)
+kdotool getactivewindow getwindowclassname getwindowname
+# e.g. -> org.kde.dolphin
+#         Home — Dolphin
 ```
 
 Then confirm Wayland-Wheeltani sees the same identity:
@@ -58,7 +59,7 @@ wayland-wheeltani --detect-foreground
 # Detected foreground application (source: Kde):
 #   class          : org.kde.dolphin
 #   resource_class : org.kde.dolphin
-#   ...
+#   title          : Home — Dolphin
 ```
 
 Copy the printed identifier into `deny_apps` / `allow_apps`.
@@ -66,15 +67,20 @@ Copy the printed identifier into `deny_apps` / `allow_apps`.
 ## Notes
 
 - The provider returns the window **resource class** (used for both `class` and
-  `resource_class`). For native KDE apps this is usually the desktop id, e.g.
-  `org.kde.dolphin`; for X/XWayland apps it is the WM class, e.g. `firefox`. The
-  window title and pid are not exposed by this provider.
+  `resource_class`) and the **title**. For native KDE apps the class is usually
+  the desktop id, e.g. `org.kde.dolphin`; for X/XWayland apps it is the WM
+  class, e.g. `firefox`. Because the title is known, `match_title = true` and
+  title-based `[[profiles]]` work on KDE. A `kdotool` too old to chain the two
+  calls falls back to the class alone. The pid is not exposed.
 - The daemon must run inside your Plasma session (the bundled `systemd --user`
   service does) so `kdotool` can reach KWin. Running it as root via plain `sudo`
   cannot reach your session.
 - `command_refresh_ms` controls the poll interval (default 500 ms). Each poll
-  asks `kdotool` once; the decision itself is still taken at middle-button press
-  using the latest polled value.
+  asks `kdotool` once; the decision itself is still taken when the trigger
+  button goes down, using the latest polled value.
+- Why polling? A KWin script could push focus changes, but it could only reach
+  the daemon through a D-Bus call, and receiving one needs a D-Bus service in
+  the daemon. The project deliberately ships no D-Bus library, so it polls.
 
 ## Troubleshooting the user service
 
@@ -97,7 +103,8 @@ If you would rather not install `kdotool`, use the generic `command` provider
 with the bundled example script
 [`integrations/kde/wheeltani-kwin-active-window.sh`](https://github.com/docloulou/Wayland-Wheeltani/blob/main/integrations/kde/wheeltani-kwin-active-window.sh).
 It loads a tiny KWin script over D-Bus (the same trick `kdotool` uses) and prints
-the focused window's resource class:
+the focused window as JSON (desktop file name, resource class and name, title,
+pid):
 
 ```toml
 [foreground]
@@ -113,20 +120,24 @@ Test it directly first (focus another window, then run it):
 
 ```bash
 integrations/kde/wheeltani-kwin-active-window.sh
-# -> org.kde.dolphin   (or firefox for an X/XWayland app)
+# -> {"app_id":"org.kde.dolphin","class":"dolphin","resource_class":"dolphin","title":"Home — Dolphin","pid":4242}
 ```
 
 What the script does, step by step:
 
-1. writes a one-shot KWin script that `print()`s
-   `workspace.activeWindow.resourceClass`;
+1. writes a one-shot KWin script that `print()`s `workspace.activeWindow` as
+   JSON, behind a marker unique to that run;
 2. loads + runs + unloads it through the `org.kde.kwin.Scripting` D-Bus interface
    (via `qdbus6` / `qdbus-qt6` / `qdbus`);
-3. scrapes the printed line back out of the systemd journal.
+3. waits up to about a second for the line carrying its marker in the systemd
+   journal (the user journal first, then the system journal) and prints it.
 
-Caveats: it needs `qdbus6` and `journalctl` (Plasma 6); journal scraping adds
-latency; and if your KWin logs to the **system** journal instead of the user
-journal, drop the `--user` flag on the `journalctl` line in the script. It is an
-untested example — the `kdotool` path above is preferred. See
+The per-run marker means a late line from an earlier poll is never taken for
+the current window. When KWin refuses the script or no line arrives, the script
+exits non-zero and the daemon treats the window as unknown.
+
+Caveats: it needs `qdbus6` and `journalctl` (Plasma 6), and journal scraping
+adds latency. It is an untested example — the `kdotool` path above is
+preferred. See
 [`integrations/kde/README.md`](https://github.com/docloulou/Wayland-Wheeltani/blob/main/integrations/kde/README.md)
 for details.
