@@ -7,7 +7,8 @@
 //   bus name : org.docloulou.WheeltaniForeground
 //   object   : /org/docloulou/WheeltaniForeground
 //   method   : GetFocused() -> s   (JSON of the focused window, or "{}")
-//   signal   : FocusedChanged(s)   (same JSON, emitted on focus change)
+//   signal   : FocusedChanged(s)   (same JSON, emitted when the focused
+//                                   window or its title changes)
 //
 // The JSON shape is: {app_id, class, resource_class, title, pid}. All fields
 // are optional. Nothing is persisted and no network is used.
@@ -47,6 +48,8 @@ export default class WheeltaniForegroundExtension extends Extension {
         this._focusHandlerId = global.display.connect(
             'notify::focus-window',
             () => this._onFocusChanged());
+        this._focusedWindow = null;
+        this._titleHandlerId = null;
 
         // Publish the current window immediately so a consumer that connects
         // mid-session gets state without waiting for the next focus change.
@@ -58,6 +61,7 @@ export default class WheeltaniForegroundExtension extends Extension {
             global.display.disconnect(this._focusHandlerId);
             this._focusHandlerId = null;
         }
+        this._trackTitle(null);
         if (this._ownerId) {
             Gio.bus_unown_name(this._ownerId);
             this._ownerId = 0;
@@ -100,7 +104,25 @@ export default class WheeltaniForegroundExtension extends Extension {
         return JSON.stringify(obj);
     }
 
+    // Follows the focused window's title, so `match_title` rules see a tab
+    // or document switch inside the same window.
+    _trackTitle(win) {
+        if (this._focusedWindow === win)
+            return;
+        if (this._focusedWindow && this._titleHandlerId)
+            this._focusedWindow.disconnect(this._titleHandlerId);
+        this._focusedWindow = win;
+        this._titleHandlerId = win
+            ? win.connect('notify::title', () => this._publish())
+            : null;
+    }
+
     _onFocusChanged() {
+        this._trackTitle(global.display.focus_window);
+        this._publish();
+    }
+
+    _publish() {
         const json = this._describeFocused();
         if (json === this._lastJson)
             return;

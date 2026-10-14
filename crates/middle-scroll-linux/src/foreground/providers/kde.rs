@@ -9,6 +9,14 @@
 //! `KWin`-script dance internally. It is polled on a background thread, exactly
 //! like the `command` provider, so the input hot path never blocks.
 //!
+//! One chained call (`getactivewindow getwindowclassname getwindowname`)
+//! returns both the class and the title, so `match_title` rules work on KDE
+//! too. A `kdotool` that rejects the chain falls back to the class alone.
+//!
+//! A push-based `KWin` script (`workspace.windowActivated` calling back into
+//! the daemon) would avoid polling, but receiving its calls needs a D-Bus
+//! service, which the no-D-Bus-crate dependency policy rules out.
+//!
 //! Install `kdotool` with your distribution's package or `cargo install kdotool`.
 
 use std::process::Command;
@@ -114,49 +122,68 @@ impl ForegroundProvider for KdeProvider {
 }
 
 fn poll_loop(refresh: Duration, shared: &SharedSnapshot) {
+    let mut with_title = true;
     loop {
-        store(shared, query_once());
+        let snapshot = match query_once(with_title) {
+            Err(reason) if with_title => {
+                // An older kdotool may not chain both getters; keep the class.
+                debug!(%reason, "kdotool class+title query failed; trying the class alone");
+                let fallback = query_once(false);
+                if fallback.is_ok() {
+                    with_title = false;
+                }
+                fallback
+            }
+            other => other,
+        };
+        store(
+            shared,
+            snapshot.unwrap_or_else(|reason| ForegroundSnapshot::Unknown { reason }),
+        );
         thread::sleep(refresh);
     }
 }
 
-fn query_once() -> ForegroundSnapshot {
-    match run_kdotool_class() {
-        Ok(Some(class)) => ForegroundSnapshot::Known(app_from_class(&class)),
-        Ok(None) => ForegroundSnapshot::Unknown {
-            reason: "kdotool reported no active window".to_owned(),
-        },
-        Err(reason) => ForegroundSnapshot::Unknown { reason },
-    }
-}
-
-fn run_kdotool_class() -> Result<Option<String>, String> {
-    let out = run_with_timeout(
-        Command::new("kdotool").args(["getactivewindow", "getwindowclassname"]),
-        HELPER_TIMEOUT,
-    )
-    .map_err(|e| format!("failed to run kdotool: {e}"))?
-    .ok_or_else(|| "kdotool timed out (killed)".to_owned())?;
+fn query_once(with_title: bool) -> Result<ForegroundSnapshot, String> {
+    let args: &[&str] = if with_title {
+        &["getactivewindow", "getwindowclassname", "getwindowname"]
+    } else {
+        &["getactivewindow", "getwindowclassname"]
+    };
+    let out = run_with_timeout(Command::new("kdotool").args(args), HELPER_TIMEOUT)
+        .map_err(|e| format!("failed to run kdotool: {e}"))?
+        .ok_or_else(|| "kdotool timed out (killed)".to_owned())?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
         debug!(status = %out.status, stderr = %stderr.trim(), "kdotool exited unsuccessfully");
         return Err(format!("kdotool exited with {}", out.status));
     }
-    Ok(parse_class_output(&String::from_utf8_lossy(&out.stdout)))
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let parsed = if with_title {
+        parse_window_output(&stdout)
+    } else {
+        parse_class_output(&stdout).map(|class| (class, None))
+    };
+    Ok(parsed.map_or_else(
+        || ForegroundSnapshot::Unknown {
+            reason: "kdotool reported no active window".to_owned(),
+        },
+        |(class, title)| ForegroundSnapshot::Known(app_from_window(&class, title)),
+    ))
 }
 
-/// Builds a [`ForegroundApp`] from a `KWin` resource class. The same value is
-/// used for `class` and `resource_class` (`kdotool` returns the WM resource
-/// class, which for native KDE apps is typically the desktop id, e.g.
-/// `org.kde.dolphin`, and the WM class for X/`XWayland` apps, e.g. `firefox`).
-/// `app_id` is left unset because `kdotool` does not expose the native Wayland
-/// `app_id` distinctly.
-fn app_from_class(class: &str) -> ForegroundApp {
+/// Builds a [`ForegroundApp`] from a `KWin` resource class and caption. The
+/// class is used for both `class` and `resource_class` (`kdotool` returns the
+/// WM resource class, which for native KDE apps is typically the desktop id,
+/// e.g. `org.kde.dolphin`, and the WM class for X/`XWayland` apps, e.g.
+/// `firefox`). `app_id` is left unset because `kdotool` does not expose the
+/// native Wayland `app_id` distinctly.
+fn app_from_window(class: &str, title: Option<String>) -> ForegroundApp {
     ForegroundApp {
         app_id: None,
         class: Some(class.to_owned()),
         resource_class: Some(class.to_owned()),
-        title: None,
+        title,
         pid: None,
         source: ForegroundSourceKind::Kde,
     }
@@ -172,6 +199,17 @@ pub fn parse_class_output(stdout: &str) -> Option<String> {
         .map(str::trim)
         .rfind(|l| !l.is_empty() && !is_window_id(l))
         .map(str::to_owned)
+}
+
+/// Parses `kdotool getactivewindow getwindowclassname getwindowname` stdout:
+/// the class line, then the title line (possibly empty). Window-id lines are
+/// skipped wherever they appear. Returns `None` when there is no class.
+#[must_use]
+pub fn parse_window_output(stdout: &str) -> Option<(String, Option<String>)> {
+    let mut lines = stdout.lines().map(str::trim).filter(|l| !is_window_id(l));
+    let class = lines.find(|l| !l.is_empty())?.to_owned();
+    let title = lines.next().filter(|t| !t.is_empty()).map(str::to_owned);
+    Some((class, title))
 }
 
 /// `kdotool` prints `KWin` window ids as `{uuid}`; that is never a real class
@@ -216,7 +254,7 @@ mod tests {
 
     #[test]
     fn app_from_class_sets_class_and_resource_class() {
-        let app = app_from_class("org.kde.dolphin");
+        let app = app_from_window("org.kde.dolphin", None);
         assert_eq!(app.class.as_deref(), Some("org.kde.dolphin"));
         assert_eq!(app.resource_class.as_deref(), Some("org.kde.dolphin"));
         assert!(app.app_id.is_none());
@@ -270,6 +308,43 @@ mod tests {
     }
 
     #[test]
+    fn parses_class_and_title() {
+        let (class, title) =
+            parse_window_output("org.kde.dolphin\nHome — Dolphin\n").expect("parsed");
+        assert_eq!(class, "org.kde.dolphin");
+        assert_eq!(title.as_deref(), Some("Home — Dolphin"));
+    }
+
+    #[test]
+    fn empty_title_is_none() {
+        let (class, title) = parse_window_output("konsole\n\n").expect("parsed");
+        assert_eq!(class, "konsole");
+        assert!(title.is_none());
+        let (_, title) = parse_window_output("konsole\n").expect("parsed");
+        assert!(title.is_none());
+    }
+
+    #[test]
+    fn window_id_lines_are_skipped_before_class_and_title() {
+        let out = "{2f4a1c0e-0000}\nfirefox\n{2f4a1c0e-0000}\nMozilla Firefox\r\n";
+        let (class, title) = parse_window_output(out).expect("parsed");
+        assert_eq!(class, "firefox");
+        assert_eq!(title.as_deref(), Some("Mozilla Firefox"));
+    }
+
+    #[test]
+    fn no_class_means_no_window() {
+        assert!(parse_window_output("").is_none());
+        assert!(parse_window_output("{2f4a1c0e-0000}\n\n").is_none());
+    }
+
+    #[test]
+    fn app_from_window_keeps_title() {
+        let app = app_from_window("code", Some("main.rs".to_owned()));
+        assert_eq!(app.title.as_deref(), Some("main.rs"));
+    }
+
+    #[test]
     fn is_window_id_recognises_braced_uuid_only() {
         assert!(is_window_id("{2f4a1c0e-0000-0000-0000-000000000000}"));
         assert!(!is_window_id("firefox"));
@@ -280,7 +355,7 @@ mod tests {
 
     #[test]
     fn app_from_x_app_class_keeps_wm_class() {
-        let app = app_from_class("firefox");
+        let app = app_from_window("firefox", None);
         assert_eq!(app.class.as_deref(), Some("firefox"));
         assert_eq!(app.resource_class.as_deref(), Some("firefox"));
         assert!(app.title.is_none());

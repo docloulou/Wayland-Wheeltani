@@ -72,4 +72,17 @@ pub enum EngineState {
     Idle,
     MiddlePending,
     Scrolling,
+    /// The trigger was released while scrolling with `inertia` enabled: the
+    /// engine keeps emitting wheel events with an exponentially decaying speed
+    /// until it stops on its own or any button/wheel input interrupts it.
+    Coasting,
+}
+
+impl EngineState {
+    /// True while the engine expects periodic [`CoreInputEvent::Tick`]s.
+    /// Backends can sleep without a tick deadline in every other state.
+    #[must_use]
+    pub const fn needs_ticks(self) -> bool {
+        matches!(self, Self::Scrolling | Self::Coasting)
+    }
 }

@@ -135,8 +135,11 @@ fn render_user_service(exe: &Path, config_path: &Path) -> anyhow::Result<String>
     let config_dir = config_path
         .parent()
         .context("config path has no parent directory")?;
-    // kdotool creates scripts in /tmp for KWin outside the service sandbox.
-    // Keep /tmp shared and writable even with ProtectSystem=strict.
+    // kdotool and the KWin helper script write to /tmp outside the service
+    // sandbox: keep /tmp shared and writable even with ProtectSystem=strict.
+    // RuntimeDirectory makes $XDG_RUNTIME_DIR/wayland-wheeltani (the control
+    // socket) writable, which ProtectSystem=strict would otherwise forbid.
+    // The config directory stays writable for `--tune` saves.
     Ok(format!(
         "[Unit]\n\
 Description=Progressive middle-button autoscroll daemon for Wayland\n\
@@ -147,8 +150,11 @@ PartOf=graphical-session.target\n\
 [Service]\n\
 Type=simple\n\
 ExecStart={} --no-interactive --config {}\n\
+ExecReload=/bin/kill -HUP $MAINPID\n\
 Restart=on-failure\n\
 RestartSec=2\n\
+RuntimeDirectory=wayland-wheeltani\n\
+RuntimeDirectoryMode=0700\n\
 PrivateTmp=false\n\
 NoNewPrivileges=true\n\
 ProtectSystem=strict\n\
@@ -189,6 +195,8 @@ fn systemctl_user(args: &[&str]) -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
     use super::*;
 
     #[test]
@@ -204,6 +212,8 @@ mod tests {
         ));
         assert!(unit.contains("Restart=on-failure"));
         assert!(unit.contains("WantedBy=default.target"));
+        assert!(unit.contains("\nExecReload=/bin/kill -HUP $MAINPID\n"));
+        assert!(unit.contains("\nRuntimeDirectory=wayland-wheeltani\nRuntimeDirectoryMode=0700\n"));
     }
 
     #[test]
@@ -223,26 +233,7 @@ mod tests {
 
     #[test]
     fn requested_action_detects_remove_service() {
-        let args = Args {
-            device: None,
-            config: None,
-            setup: false,
-            pin_port: false,
-            install_service: false,
-            remove_service: true,
-            install_udev_rule: false,
-            remove_udev_rule: false,
-            start: false,
-            stop: false,
-            restart: false,
-            list_devices: false,
-            no_grab: false,
-            dry_run: false,
-            no_interactive: false,
-            verbose: 0,
-            safety_timeout_seconds: None,
-            detect_foreground: false,
-        };
+        let args = Args::parse_from(["wlw", "--remove-service"]);
 
         assert_eq!(requested_action(&args), Some(ServiceAction::Remove));
     }

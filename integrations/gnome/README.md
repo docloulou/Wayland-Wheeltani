@@ -7,7 +7,7 @@ focused window on the **session bus** and the daemon reads it through `gdbus`.
 - Bus name: `org.docloulou.WheeltaniForeground`
 - Object path: `/org/docloulou/WheeltaniForeground`
 - Method: `GetFocused() -> s` returns the focused window as JSON (or `{}`)
-- Signal: `FocusedChanged(s)` emitted on every focus change
+- Signal: `FocusedChanged(s)` emitted when the focused window or its title changes
 
 JSON shape (all fields optional):
 
@@ -44,7 +44,7 @@ You should get a `('{...}',)` tuple describing the focused window.
 
 ## Use it
 
-In your Wayland-Wheeltani config (`~/.config/Wayland-Wheeltani/config.toml`):
+In your Wayland-Wheeltani config (`~/.config/wayland-wheeltani/config.toml`):
 
 ```toml
 [foreground]

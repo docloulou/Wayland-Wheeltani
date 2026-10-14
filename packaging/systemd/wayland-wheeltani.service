@@ -1,0 +1,38 @@
+# systemd --user unit shipped by distribution packages (installed to
+# /usr/lib/systemd/user). Configure the mouse first, then enable it:
+#
+#   wayland-wheeltani --setup
+#   sudo wayland-wheeltani --install-udev-rule
+#   systemctl --user enable --now wayland-wheeltani
+#
+# It reads the default config, ~/.config/wayland-wheeltani/config.toml.
+[Unit]
+Description=Progressive middle-button autoscroll daemon for Wayland
+Documentation=man:wayland-wheeltani(1) https://github.com/docloulou/Wayland-Wheeltani
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/wayland-wheeltani --no-interactive
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2
+# The control socket (--status, --toggle, --tune) lives in
+# $XDG_RUNTIME_DIR/wayland-wheeltani.
+RuntimeDirectory=wayland-wheeltani
+RuntimeDirectoryMode=0700
+# kdotool and the KWin helper script share files with KWin through /tmp.
+PrivateTmp=false
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+# The config directory stays writable for `--tune` saves ("-": the unit
+# still starts if it does not exist yet).
+ReadWritePaths=-%h/.config/wayland-wheeltani /tmp
+
+[Install]
+# default.target rather than graphical-session.target: the latter is never
+# reached on Hyprland or Sway started without uwsm. The foreground provider
+# keeps looking for the compositor if the service starts first.
+WantedBy=default.target

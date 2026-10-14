@@ -79,6 +79,26 @@ impl PhysicalMouse {
     pub fn product_id(&self) -> u16 {
         self.device.input_id().product()
     }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Buttons and keys the device can report.
+    pub fn supported_keys(&self) -> Vec<evdev::KeyCode> {
+        self.device
+            .supported_keys()
+            .map(|set| set.iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// Relative axes the device can report.
+    pub fn supported_axes(&self) -> Vec<evdev::RelativeAxisCode> {
+        self.device
+            .supported_relative_axes()
+            .map(|set| set.iter().collect())
+            .unwrap_or_default()
+    }
 }
 
 impl Drop for PhysicalMouse {

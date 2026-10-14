@@ -1,0 +1,66 @@
+# Maintainer: docloulou <https://github.com/docloulou>
+# makepkg runs every function with errexit, and sets srcdir/pkgdir itself.
+# shellcheck shell=bash disable=SC2034,SC2154,SC2164
+#
+# Builds the tagged release from source. scripts/bump-version.sh keeps pkgver
+# in sync with Cargo.toml; run `updpkgsums` after a bump to fill sha256sums.
+
+pkgname=wayland-wheeltani
+pkgver=1.3.3
+pkgrel=1
+pkgdesc="Progressive middle-button autoscroll daemon for Wayland (evdev/uinput)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/docloulou/Wayland-Wheeltani"
+license=('0BSD')
+depends=('gcc-libs' 'glibc')
+makedepends=('cargo')
+optdepends=(
+  'kdotool: foreground filter and profiles on KDE Plasma'
+  'qt6-tools: qdbus6 for the bundled KWin helper script'
+  'glib2: gdbus for the GNOME foreground provider'
+)
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+_srcdir="Wayland-Wheeltani-$pkgver"
+
+prepare() {
+  cd "$_srcdir"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_srcdir"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release -p wayland-wheeltani
+  scripts/generate-assets.sh target/release target/assets
+}
+
+check() {
+  cd "$_srcdir"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo test --frozen --workspace
+}
+
+package() {
+  cd "$_srcdir"
+  local assets=target/assets
+
+  install -Dm755 target/release/wayland-wheeltani target/release/wlw -t "$pkgdir/usr/bin/"
+  install -Dm644 "$assets"/man/*.1 -t "$pkgdir/usr/share/man/man1/"
+  install -Dm644 "$assets/completions/wayland-wheeltani.bash" \
+    "$pkgdir/usr/share/bash-completion/completions/wayland-wheeltani"
+  install -Dm644 "$assets/completions/wlw.bash" \
+    "$pkgdir/usr/share/bash-completion/completions/wlw"
+  install -Dm644 "$assets/completions/_wayland-wheeltani" "$assets/completions/_wlw" \
+    -t "$pkgdir/usr/share/zsh/site-functions/"
+  install -Dm644 "$assets"/completions/*.fish -t "$pkgdir/usr/share/fish/vendor_completions.d/"
+  install -Dm644 packaging/systemd/wayland-wheeltani.service -t "$pkgdir/usr/lib/systemd/user/"
+
+  install -Dm644 README.md CHANGELOG.md examples/config.toml -t "$pkgdir/usr/share/doc/$pkgname/"
+  install -d "$pkgdir/usr/share/$pkgname"
+  cp -r --no-preserve=ownership integrations contrib "$pkgdir/usr/share/$pkgname/"
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

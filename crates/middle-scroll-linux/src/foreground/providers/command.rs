@@ -96,7 +96,8 @@ fn run_once(command: &[String]) -> ForegroundSnapshot {
 
 /// Parses provider command stdout. A payload starting with `{` is parsed as the
 /// shared JSON object; otherwise the first non-empty line is taken as a bare app
-/// id.
+/// id. A JSON object without any identity field (`{}`, or a title alone)
+/// means no window has focus.
 #[must_use]
 pub fn parse_stdout(stdout: &str) -> ForegroundSnapshot {
     let trimmed = stdout.trim();
@@ -107,7 +108,16 @@ pub fn parse_stdout(stdout: &str) -> ForegroundSnapshot {
     }
     if trimmed.starts_with('{') {
         return match serde_json::from_str::<serde_json::Value>(trimmed) {
-            Ok(v) => ForegroundSnapshot::Known(json_to_app(&v, ForegroundSourceKind::Command)),
+            Ok(v) => {
+                let app = json_to_app(&v, ForegroundSourceKind::Command);
+                if app.app_id.is_none() && app.class.is_none() && app.resource_class.is_none() {
+                    ForegroundSnapshot::Unknown {
+                        reason: "command reported no focused window".to_owned(),
+                    }
+                } else {
+                    ForegroundSnapshot::Known(app)
+                }
+            }
             Err(err) => ForegroundSnapshot::Unknown {
                 reason: format!("invalid JSON from command: {err}"),
             },
@@ -175,6 +185,18 @@ mod tests {
     fn empty_stdout_is_unknown() {
         assert!(matches!(
             parse_stdout("   \n"),
+            ForegroundSnapshot::Unknown { .. }
+        ));
+    }
+
+    #[test]
+    fn json_without_identity_is_unknown() {
+        assert!(matches!(
+            parse_stdout("{}"),
+            ForegroundSnapshot::Unknown { .. }
+        ));
+        assert!(matches!(
+            parse_stdout(r#"{"title":"Desktop"}"#),
             ForegroundSnapshot::Unknown { .. }
         ));
     }

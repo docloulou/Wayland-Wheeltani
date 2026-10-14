@@ -14,4 +14,4 @@ pub mod matcher;
 pub mod providers;
 
 pub use config::{ForegroundConfig, ForegroundFileConfig};
-pub use filter::{AutoscrollDecision, ForegroundGate};
+pub use filter::{AutoscrollDecision, ForegroundGate, GateDecision, ProfileRule};

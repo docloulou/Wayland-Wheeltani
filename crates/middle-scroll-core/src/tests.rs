@@ -1,4 +1,4 @@
-use crate::config::{ConfigError, CoreConfig, SpeedStep};
+use crate::config::{AxisLock, ConfigError, CoreConfig, Mode, SpeedStep};
 use crate::engine::Engine;
 use crate::model::{CoreAction, CoreInputEvent, EngineState, MouseButton};
 
@@ -1019,4 +1019,383 @@ fn horizontal_release_during_scroll_returns_to_idle() {
     assert!(!release.contains(&CoreAction::EmitMiddleClick));
     assert_eq!(e.state(), EngineState::Idle);
     assert_eq!(e.offset_x_units(), 0);
+}
+
+#[test]
+fn config_rejects_bad_inertia_half_life() {
+    let cfg = CoreConfig {
+        inertia_half_life_ms: 0,
+        ..CoreConfig::default()
+    };
+    assert_eq!(cfg.validate(), Err(ConfigError::BadInertiaHalfLife(0)));
+}
+
+#[test]
+fn reversal_does_not_pay_back_previous_direction_remainder() {
+    let mut e = engine_with(CoreConfig {
+        emit_hires_wheel: false,
+        ..CoreConfig::default()
+    });
+    e.process(CoreInputEvent::MiddleDown);
+    // Just above the deadzone: minimum speed (1.5 detents/s).
+    e.process(CoreInputEvent::Motion { dx: 0, dy: 11 });
+    // ~0.91 detent accumulated downward, nothing emitted yet.
+    let down = run_for(&mut e, 0.6, 8333);
+    assert_eq!(count_detents(&down), 0);
+
+    e.process(CoreInputEvent::Motion { dx: 0, dy: -22 });
+    // ~1.06 detents upward: one full detent, which the stale downward
+    // remainder would otherwise have swallowed.
+    let up = run_for(&mut e, 0.7, 8333);
+    assert_eq!(count_detents(&up), 1);
+}
+
+#[test]
+fn engine_state_needs_ticks_only_while_scrolling_or_coasting() {
+    assert!(!EngineState::Idle.needs_ticks());
+    assert!(!EngineState::MiddlePending.needs_ticks());
+    assert!(EngineState::Scrolling.needs_ticks());
+    assert!(EngineState::Coasting.needs_ticks());
+}
+
+fn engine_toggle() -> Engine {
+    engine_with(CoreConfig {
+        mode: Mode::ToggleProgressive,
+        ..CoreConfig::default()
+    })
+}
+
+fn latch(e: &mut Engine) {
+    e.process(CoreInputEvent::MiddleDown);
+    let up = e.process(CoreInputEvent::MiddleUp);
+    assert!(up.contains(&CoreAction::EnterScrollMode));
+    assert!(!up.contains(&CoreAction::EmitMiddleClick));
+    assert_eq!(e.state(), EngineState::Scrolling);
+    assert!(e.is_latched());
+}
+
+#[test]
+fn toggle_click_latches_scroll_mode() {
+    let mut e = engine_toggle();
+    latch(&mut e);
+    let motion = e.process(CoreInputEvent::Motion { dx: 0, dy: 100 });
+    assert_eq!(motion, vec![CoreAction::Suppress]);
+    let actions = run_for(&mut e, 0.5, 8333);
+    assert!(count_detents(&actions) < 0);
+}
+
+#[test]
+fn toggle_left_click_exits_and_is_swallowed() {
+    let mut e = engine_toggle();
+    latch(&mut e);
+    e.process(CoreInputEvent::Motion { dx: 0, dy: 100 });
+
+    let down = e.process(CoreInputEvent::LeftDown);
+    assert_eq!(down, vec![CoreAction::Suppress, CoreAction::ExitScrollMode]);
+    assert_eq!(e.state(), EngineState::Idle);
+    assert!(!e.is_latched());
+    assert_eq!(
+        e.process(CoreInputEvent::LeftUp),
+        vec![CoreAction::Suppress]
+    );
+
+    // The next click goes through normally.
+    assert_eq!(
+        e.process(CoreInputEvent::LeftDown),
+        vec![CoreAction::ForwardMouseButton {
+            button: MouseButton::Left,
+            pressed: true
+        }]
+    );
+}
+
+#[test]
+fn toggle_middle_click_exits_and_swallows_its_release() {
+    let mut e = engine_toggle();
+    latch(&mut e);
+    let down = e.process(CoreInputEvent::MiddleDown);
+    assert!(down.contains(&CoreAction::ExitScrollMode));
+    assert_eq!(e.state(), EngineState::Idle);
+    assert_eq!(
+        e.process(CoreInputEvent::MiddleUp),
+        vec![CoreAction::Suppress]
+    );
+
+    // A fresh click latches again.
+    latch(&mut e);
+}
+
+#[test]
+fn toggle_drag_and_release_behaves_like_hold() {
+    let mut e = engine_toggle();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 0, dy: 100 });
+    assert_eq!(e.state(), EngineState::Scrolling);
+    assert!(!e.is_latched());
+    let up = e.process(CoreInputEvent::MiddleUp);
+    assert_eq!(up, vec![CoreAction::ExitScrollMode]);
+    assert_eq!(e.state(), EngineState::Idle);
+}
+
+#[test]
+fn toggle_real_wheel_passes_through_while_latched() {
+    let mut e = engine_toggle();
+    latch(&mut e);
+    let wheel = e.process(CoreInputEvent::Wheel {
+        vertical: 1,
+        horizontal: 0,
+    });
+    assert_eq!(
+        wheel,
+        vec![CoreAction::ForwardWheel {
+            vertical: 1,
+            horizontal: 0
+        }]
+    );
+    assert!(e.is_latched());
+}
+
+fn engine_inertia() -> Engine {
+    engine_with(CoreConfig {
+        inertia: true,
+        ..CoreConfig::default()
+    })
+}
+
+fn start_coasting(e: &mut Engine) {
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 0, dy: 100 });
+    let _ = run_for(e, 0.3, 8333);
+    let up = e.process(CoreInputEvent::MiddleUp);
+    assert!(!up.contains(&CoreAction::ExitScrollMode));
+    assert!(!up.contains(&CoreAction::EmitMiddleClick));
+    assert_eq!(e.state(), EngineState::Coasting);
+}
+
+#[test]
+fn inertia_is_off_by_default() {
+    let mut e = engine();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 0, dy: 100 });
+    let _ = run_for(&mut e, 0.3, 8333);
+    e.process(CoreInputEvent::MiddleUp);
+    assert_eq!(e.state(), EngineState::Idle);
+}
+
+#[test]
+fn inertia_keeps_scrolling_after_release_then_stops() {
+    let mut e = engine_inertia();
+    start_coasting(&mut e);
+
+    let first = run_for(&mut e, 0.3, 8333);
+    let second = run_for(&mut e, 0.3, 8333);
+    assert!(count_detents(&first) < 0, "coast continues the scroll");
+    assert!(
+        count_detents(&first) < count_detents(&second),
+        "coast slows down: {first:?} vs {second:?}"
+    );
+
+    let rest = run_for(&mut e, 5.0, 8333);
+    assert!(rest.contains(&CoreAction::ExitScrollMode));
+    assert_eq!(e.state(), EngineState::Idle);
+    assert!(run_for(&mut e, 0.5, 8333).is_empty());
+}
+
+#[test]
+fn inertia_does_not_coast_when_released_inside_deadzone() {
+    let mut e = engine_inertia();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 0, dy: 100 });
+    let _ = run_for(&mut e, 0.3, 8333);
+    e.process(CoreInputEvent::Motion { dx: 0, dy: -100 });
+    let _ = run_for(&mut e, 0.05, 8333);
+    let up = e.process(CoreInputEvent::MiddleUp);
+    assert_eq!(up, vec![CoreAction::ExitScrollMode]);
+    assert_eq!(e.state(), EngineState::Idle);
+}
+
+#[test]
+fn middle_press_catches_coast_without_click() {
+    let mut e = engine_inertia();
+    start_coasting(&mut e);
+    let down = e.process(CoreInputEvent::MiddleDown);
+    assert!(down.contains(&CoreAction::ExitScrollMode));
+    assert_eq!(e.state(), EngineState::MiddlePending);
+    let up = e.process(CoreInputEvent::MiddleUp);
+    assert!(!up.contains(&CoreAction::EmitMiddleClick));
+    assert_eq!(e.state(), EngineState::Idle);
+
+    // The next plain click is a real click again.
+    e.process(CoreInputEvent::MiddleDown);
+    assert_eq!(
+        e.process(CoreInputEvent::MiddleUp),
+        vec![CoreAction::EmitMiddleClick]
+    );
+}
+
+#[test]
+fn drag_after_catching_coast_scrolls_again() {
+    let mut e = engine_inertia();
+    start_coasting(&mut e);
+    e.process(CoreInputEvent::MiddleDown);
+    let motion = e.process(CoreInputEvent::Motion { dx: 0, dy: -100 });
+    assert!(motion.contains(&CoreAction::EnterScrollMode));
+    let actions = run_for(&mut e, 0.3, 8333);
+    assert!(count_detents(&actions) > 0);
+}
+
+#[test]
+fn left_click_stops_coast_and_goes_through() {
+    let mut e = engine_inertia();
+    start_coasting(&mut e);
+    let down = e.process(CoreInputEvent::LeftDown);
+    assert_eq!(
+        down,
+        vec![
+            CoreAction::ExitScrollMode,
+            CoreAction::ForwardMouseButton {
+                button: MouseButton::Left,
+                pressed: true
+            }
+        ]
+    );
+    assert_eq!(e.state(), EngineState::Idle);
+}
+
+#[test]
+fn motion_during_coast_moves_the_pointer() {
+    let mut e = engine_inertia();
+    start_coasting(&mut e);
+    let motion = e.process(CoreInputEvent::Motion { dx: 5, dy: -3 });
+    assert_eq!(motion, vec![CoreAction::ForwardMotion { dx: 5, dy: -3 }]);
+    assert_eq!(e.state(), EngineState::Coasting);
+}
+
+#[test]
+fn axis_lock_dominant_scrolls_only_the_larger_axis() {
+    let mut e = engine_with(CoreConfig {
+        axis_lock: AxisLock::Dominant,
+        ..CoreConfig::default()
+    });
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 60, dy: 100 });
+    let vertical = run_for(&mut e, 0.5, 8333);
+    assert!(count_detents(&vertical) < 0);
+    assert_eq!(count_detents_h(&vertical), 0);
+    assert_eq!(count_hires_h(&vertical), 0);
+
+    e.process(CoreInputEvent::Motion { dx: 100, dy: 0 });
+    let horizontal = run_for(&mut e, 0.5, 8333);
+    assert!(count_detents_h(&horizontal) > 0);
+    assert_eq!(count_detents(&horizontal), 0);
+    assert_eq!(count_hires(&horizontal), 0);
+}
+
+#[test]
+fn axis_lock_first_keeps_the_first_axis_for_the_gesture() {
+    let mut e = engine_with(CoreConfig {
+        axis_lock: AxisLock::First,
+        ..CoreConfig::default()
+    });
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 30, dy: 0 });
+    let _ = run_for(&mut e, 0.1, 8333);
+    e.process(CoreInputEvent::Motion { dx: 0, dy: 200 });
+    let actions = run_for(&mut e, 0.5, 8333);
+    assert!(count_detents_h(&actions) > 0);
+    assert_eq!(count_detents(&actions), 0);
+
+    // A new gesture picks again.
+    e.process(CoreInputEvent::MiddleUp);
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 0, dy: 100 });
+    let actions = run_for(&mut e, 0.5, 8333);
+    assert!(count_detents(&actions) < 0);
+    assert_eq!(count_detents_h(&actions), 0);
+}
+
+#[test]
+fn set_config_applies_immediately_when_idle() {
+    let mut e = engine();
+    e.set_config(CoreConfig {
+        invert_vertical: true,
+        ..CoreConfig::default()
+    });
+    assert!(e.config().invert_vertical);
+}
+
+#[test]
+fn set_config_is_deferred_until_the_gesture_ends() {
+    let mut e = engine();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 0, dy: 100 });
+    e.set_config(CoreConfig {
+        invert_vertical: true,
+        ..CoreConfig::default()
+    });
+    assert!(!e.config().invert_vertical);
+    assert!(count_detents(&run_for(&mut e, 0.3, 8333)) < 0);
+
+    e.process(CoreInputEvent::MiddleUp);
+    assert!(e.config().invert_vertical);
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 0, dy: 100 });
+    assert!(count_detents(&run_for(&mut e, 0.3, 8333)) > 0);
+}
+
+#[test]
+fn abort_while_scrolling_exits_and_swallows_the_held_trigger() {
+    let mut e = engine();
+    e.process(CoreInputEvent::MiddleDown);
+    e.process(CoreInputEvent::Motion { dx: 0, dy: 100 });
+    let mut out = Vec::new();
+    e.abort(&mut out);
+    assert_eq!(out, vec![CoreAction::ExitScrollMode]);
+    assert_eq!(e.state(), EngineState::Idle);
+    assert_eq!(
+        e.process(CoreInputEvent::MiddleUp),
+        vec![CoreAction::Suppress]
+    );
+}
+
+#[test]
+fn abort_while_pending_emits_no_click() {
+    let mut e = engine();
+    e.process(CoreInputEvent::MiddleDown);
+    let mut out = Vec::new();
+    e.abort(&mut out);
+    assert!(out.is_empty());
+    assert_eq!(
+        e.process(CoreInputEvent::MiddleUp),
+        vec![CoreAction::Suppress]
+    );
+}
+
+#[test]
+fn lost_release_does_not_eat_the_next_click() {
+    let mut e = engine();
+    e.process(CoreInputEvent::MiddleDown);
+    let mut out = Vec::new();
+    // E.g. the device was unplugged while the button was held.
+    e.abort(&mut out);
+    e.process(CoreInputEvent::MiddleDown);
+    assert_eq!(
+        e.process(CoreInputEvent::MiddleUp),
+        vec![CoreAction::EmitMiddleClick]
+    );
+}
+
+#[test]
+fn abort_while_coasting_stops_without_swallowing() {
+    let mut e = engine_inertia();
+    start_coasting(&mut e);
+    let mut out = Vec::new();
+    e.abort(&mut out);
+    assert_eq!(out, vec![CoreAction::ExitScrollMode]);
+    assert_eq!(e.state(), EngineState::Idle);
+    e.process(CoreInputEvent::MiddleDown);
+    assert_eq!(
+        e.process(CoreInputEvent::MiddleUp),
+        vec![CoreAction::EmitMiddleClick]
+    );
 }
