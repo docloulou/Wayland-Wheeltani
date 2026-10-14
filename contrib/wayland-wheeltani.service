@@ -8,7 +8,7 @@ PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/wayland-wheeltani --no-interactive --config %h/.config/Wayland-Wheeltani/config.toml
+ExecStart=%h/.local/bin/wayland-wheeltani --no-interactive --config %h/.config/wayland-wheeltani/config.toml
 # `systemctl --user reload wayland-wheeltani` re-reads the config file.
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
@@ -24,7 +24,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=read-only
 # The config directory stays writable for `--tune` saves.
-ReadWritePaths=%h/.config/Wayland-Wheeltani /tmp
+ReadWritePaths=%h/.config/wayland-wheeltani /tmp
 
 [Install]
 # default.target rather than graphical-session.target: the latter is never

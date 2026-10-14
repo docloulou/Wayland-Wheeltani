@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Clippy runs the pedantic and nursery groups, which gain lints with every
+  # Rust release. Pinning its toolchain keeps CI from turning red on a new
+  # release; bump it deliberately and fix the new findings in the same PR.
+  CLIPPY_TOOLCHAIN: "1.97.0"
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.CLIPPY_TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      # `default-members` only lists the portable core, so --workspace is
+      # needed to lint the Linux daemon too.
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: test (${{ matrix.toolchain }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # stable, and the workspace MSRV (rust-version in Cargo.toml).
+        toolchain: [stable, "1.85"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --locked
+      # The ignored tests need /dev/uinput and root; run them locally with
+      # `sudo -E cargo test -p wayland-wheeltani -- --ignored`.
+
+  core-msrv:
+    name: core MSRV (1.74)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.74"
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p middle-scroll-core --locked
+
+  assets:
+    name: man pages and completions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked -p wayland-wheeltani
+      - run: scripts/generate-assets.sh target/debug target/assets
+      - name: Check the completion scripts parse
+        run: bash -n target/assets/completions/wayland-wheeltani.bash target/assets/completions/wlw.bash
+
+  shell:
+    name: shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: git ls-files -z '*.sh' 'packaging/arch/PKGBUILD' | xargs -0 shellcheck

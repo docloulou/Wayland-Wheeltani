@@ -45,10 +45,18 @@ const DAEMON_ARGS: [&str; 16] = [
 ))]
 #[allow(clippy::struct_excessive_bools)]
 pub struct Args {
-    #[arg(long, value_name = "PATH")]
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Mouse event node to use (e.g. /dev/input/event5) instead of the configured mice"
+    )]
     pub device: Option<PathBuf>,
 
-    #[arg(long, value_name = "FILE")]
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Config file to read and write (default: ~/.config/wayland-wheeltani/config.toml)"
+    )]
     pub config: Option<PathBuf>,
 
     #[arg(
@@ -236,13 +244,22 @@ pub struct Args {
         long,
         action = ArgAction::SetTrue,
         conflicts_with_all = ["device", "dry_run", "no_grab", "safety_timeout_seconds"],
+        help = "List the connected mice with their USB ids and event nodes"
     )]
     pub list_devices: bool,
 
-    #[arg(long = "no-grab", action = ArgAction::SetTrue)]
+    #[arg(
+        long = "no-grab",
+        action = ArgAction::SetTrue,
+        help = "Do not take exclusive access to the mouse; the desktop then sees both the physical and the virtual events (debugging only)"
+    )]
     pub no_grab: bool,
 
-    #[arg(long, action = ArgAction::SetTrue)]
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        help = "Log what would be emitted instead of creating the virtual mouse; implies --no-grab"
+    )]
     pub dry_run: bool,
 
     #[arg(
@@ -252,10 +269,19 @@ pub struct Args {
     )]
     pub no_interactive: bool,
 
-    #[arg(short, long, action = ArgAction::Count)]
+    #[arg(
+        short,
+        long,
+        action = ArgAction::Count,
+        help = "More logging: -v for debug, -vv for trace (RUST_LOG overrides it)"
+    )]
     pub verbose: u8,
 
-    #[arg(long, value_name = "SECONDS")]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        help = "Exit after this many seconds, a safety net while trying new settings"
+    )]
     pub safety_timeout_seconds: Option<u64>,
 
     #[arg(
