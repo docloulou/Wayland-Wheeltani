@@ -2,7 +2,8 @@
 name = "middle-scroll-core"
 version.workspace = true
 edition.workspace = true
-rust-version.workspace = true
+# Portable core: no clap, so it keeps the lower MSRV.
+rust-version = "1.74"
 license.workspace = true
 repository.workspace = true
 description = "Cross-platform core: state machine + progressive scroll engine for Wayland-Wheeltani."

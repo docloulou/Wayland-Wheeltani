@@ -12,7 +12,8 @@ pub fn normalize(s: &str) -> String {
 
 /// Returns true if any populated identity field of `app` matches an entry in
 /// `list`. `title` is only considered when `match_title` is set.
-fn app_matches(app: &ForegroundApp, list: &[String], match_title: bool) -> bool {
+#[must_use]
+pub fn app_matches(app: &ForegroundApp, list: &[String], match_title: bool) -> bool {
     if list.is_empty() {
         return false;
     }

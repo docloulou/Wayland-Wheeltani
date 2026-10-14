@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -7,23 +7,32 @@ use nix::unistd::Uid;
 
 pub const UDEV_RULE_PATH: &str = "/etc/udev/rules.d/60-wayland-wheeltani.rules";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct DeviceIds {
-    vendor: String,
-    product: String,
+/// Vendor and product id of a mouse, as evdev reports them. They are the
+/// same values as `[device_match]` and as the `id/vendor`/`id/product`
+/// attributes udev sees, for USB and Bluetooth mice alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UsbId {
+    pub vendor: u16,
+    pub product: u16,
 }
 
-pub fn install_for_device(device_path: &Path) -> anyhow::Result<PathBuf> {
+/// Writes a rule giving the logged-in user access to `/dev/uinput` and to
+/// the pointer nodes of the given mice, then reloads udev.
+pub fn install_for_devices(ids: &[UsbId]) -> anyhow::Result<PathBuf> {
     ensure_root()?;
-    let ids = read_device_ids(device_path)?;
+    if ids.is_empty() {
+        bail!("no mouse to write a udev rule for; run `--setup` first");
+    }
     let rule_path = PathBuf::from(UDEV_RULE_PATH);
-    write_rule(&rule_path, &render_rule(&ids))?;
+    write_rule(&rule_path, &render_rule(ids))?;
     reload_rules()?;
+    let listed: Vec<String> = ids
+        .iter()
+        .map(|id| format!("{:04x}:{:04x}", id.vendor, id.product))
+        .collect();
     println!(
-        "Installed udev rule for {} (vendor={}, product={}) at {}",
-        device_path.display(),
-        ids.vendor,
-        ids.product,
+        "Installed udev rule for {} at {}",
+        listed.join(", "),
         rule_path.display()
     );
     Ok(rule_path)
@@ -50,58 +59,34 @@ pub fn ensure_root() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn read_device_ids(device_path: &Path) -> anyhow::Result<DeviceIds> {
-    let output = Command::new("udevadm")
-        .args(["info", "-q", "property", "-n"])
-        .arg(device_path)
-        .output()
-        .context("failed to execute udevadm info")?;
-    if !output.status.success() {
-        bail!(
-            "udevadm info failed for {} with {}",
-            device_path.display(),
-            output.status
+fn render_rule(ids: &[UsbId]) -> String {
+    let mut rule = String::from(
+        "# Installed by `wayland-wheeltani --install-udev-rule`; remove it with\n\
+         # `sudo wayland-wheeltani --remove-udev-rule`.\n\
+         ACTION!=\"add|change\", GOTO=\"wayland_wheeltani_end\"\n\
+         \n\
+         KERNEL==\"uinput\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\"\n\
+         \n\
+         # One line per configured mouse. Only pointer nodes are opened to the\n\
+         # logged-in user: the keyboard interface of a combined receiver keeps\n\
+         # its default root-only permissions.\n",
+    );
+    let mut seen = Vec::new();
+    for id in ids {
+        if seen.contains(id) {
+            continue;
+        }
+        seen.push(*id);
+        let _ = writeln!(
+            rule,
+            "KERNEL==\"event[0-9]*\", SUBSYSTEM==\"input\", ENV{{ID_INPUT_MOUSE}}==\"1\", \
+             ENV{{ID_INPUT_KEYBOARD}}!=\"1\", ATTRS{{id/vendor}}==\"{:04x}\", \
+             ATTRS{{id/product}}==\"{:04x}\", TAG+=\"uaccess\"",
+            id.vendor, id.product
         );
     }
-    let raw = String::from_utf8(output.stdout).context("udevadm output was not valid UTF-8")?;
-    parse_device_ids(&raw).with_context(|| {
-        format!(
-            "failed to find ID_VENDOR_ID and ID_MODEL_ID for {}; use a USB mouse or install contrib/60-wayland-wheeltani.rules manually",
-            device_path.display()
-        )
-    })
-}
-
-fn parse_device_ids(raw: &str) -> Option<DeviceIds> {
-    let props: HashMap<_, _> = raw
-        .lines()
-        .filter_map(|line| line.split_once('='))
-        .collect();
-    let vendor = normalize_hex_id(props.get("ID_VENDOR_ID")?)?;
-    let product = normalize_hex_id(props.get("ID_MODEL_ID")?)?;
-    Some(DeviceIds { vendor, product })
-}
-
-fn normalize_hex_id(raw: &str) -> Option<String> {
-    let value = raw.trim();
-    if value.len() == 4 && value.chars().all(|c| c.is_ascii_hexdigit()) {
-        Some(value.to_ascii_lowercase())
-    } else {
-        None
-    }
-}
-
-fn render_rule(ids: &DeviceIds) -> String {
-    format!(
-        "ACTION!=\"add|change\", GOTO=\"wayland_wheeltani_end\"\n\
-\n\
-KERNEL==\"uinput\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\"\n\
-\n\
-KERNEL==\"event[0-9]*\", SUBSYSTEM==\"input\", ENV{{ID_VENDOR_ID}}==\"{}\", ENV{{ID_MODEL_ID}}==\"{}\", MODE=\"0600\", TAG+=\"uaccess\"\n\
-\n\
-LABEL=\"wayland_wheeltani_end\"\n",
-        ids.vendor, ids.product
-    )
+    rule.push_str("\nLABEL=\"wayland_wheeltani_end\"\n");
+    rule
 }
 
 fn write_rule(path: &Path, contents: &str) -> anyhow::Result<()> {
@@ -143,42 +128,44 @@ fn run_udevadm(args: &[&str]) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parses_and_normalizes_usb_ids() {
-        let ids = parse_device_ids("ID_VENDOR_ID=046D\nID_MODEL_ID=C539\n").unwrap();
-        assert_eq!(
-            ids,
-            DeviceIds {
-                vendor: "046d".to_owned(),
-                product: "c539".to_owned(),
-            }
-        );
-    }
-
-    #[test]
-    fn rejects_missing_or_invalid_usb_ids() {
-        assert!(parse_device_ids("ID_VENDOR_ID=046d\n").is_none());
-        assert!(parse_device_ids("ID_VENDOR_ID=not-hex\nID_MODEL_ID=c539\n").is_none());
-    }
+    const RECEIVER: UsbId = UsbId {
+        vendor: 0x046d,
+        product: 0xc539,
+    };
 
     #[test]
     fn renders_targeted_uaccess_rule() {
-        let rule = render_rule(&DeviceIds {
-            vendor: "046d".to_owned(),
-            product: "c539".to_owned(),
-        });
-        assert!(rule.contains("KERNEL==\"uinput\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\""));
-        assert!(rule.contains("ENV{ID_VENDOR_ID}==\"046d\""));
-        assert!(rule.contains("ENV{ID_MODEL_ID}==\"c539\""));
+        let rule = render_rule(&[RECEIVER]);
+        assert!(rule.contains(
+            "KERNEL==\"uinput\", SUBSYSTEM==\"misc\", TAG+=\"uaccess\", OPTIONS+=\"static_node=uinput\""
+        ));
+        assert!(rule.contains("ATTRS{id/vendor}==\"046d\", ATTRS{id/product}==\"c539\""));
+        assert!(rule.contains("GOTO=\"wayland_wheeltani_end\""));
+        assert!(rule.contains("LABEL=\"wayland_wheeltani_end\""));
     }
 
     #[test]
-    fn renders_named_rule_label() {
-        let rule = render_rule(&DeviceIds {
-            vendor: "1234".to_owned(),
-            product: "abcd".to_owned(),
-        });
-        assert!(rule.contains("GOTO=\"wayland_wheeltani_end\""));
-        assert!(rule.contains("LABEL=\"wayland_wheeltani_end\""));
+    fn rule_only_opens_pointer_nodes() {
+        let rule = render_rule(&[RECEIVER]);
+        let line = rule
+            .lines()
+            .find(|l| l.contains("ATTRS{id/vendor}"))
+            .unwrap();
+        assert!(line.contains("ENV{ID_INPUT_MOUSE}==\"1\""));
+        assert!(line.contains("ENV{ID_INPUT_KEYBOARD}!=\"1\""));
+        // uaccess alone grants access; a MODE would also loosen the node for
+        // whoever owns it when no seat is active.
+        assert!(!rule.contains("MODE="));
+    }
+
+    #[test]
+    fn renders_one_line_per_distinct_mouse() {
+        let other = UsbId {
+            vendor: 0x1,
+            product: 0x2bc,
+        };
+        let rule = render_rule(&[RECEIVER, other, RECEIVER]);
+        assert_eq!(rule.matches("ATTRS{id/vendor}").count(), 2);
+        assert!(rule.contains("ATTRS{id/vendor}==\"0001\", ATTRS{id/product}==\"02bc\""));
     }
 }

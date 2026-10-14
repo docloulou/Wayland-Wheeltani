@@ -28,9 +28,11 @@ impl DeviceInfo {
     }
 }
 
-/// Criteria for matching a physical device across reboots. `vendor_id` and
-/// `product_id` are mandatory; `name` and `phys` further narrow the match
-/// when several devices share the same USB IDs (e.g. two identical mice).
+/// Criteria for matching a physical device across reboots.
+///
+/// `vendor_id` and `product_id` are mandatory; `name` and `phys` further
+/// narrow the match when several devices share the same USB IDs (e.g. two
+/// identical mice).
 #[derive(Debug, Clone)]
 pub struct MatchCriteria<'a> {
     pub vendor_id: u16,
@@ -64,10 +66,17 @@ pub fn enumerate_mice() -> Vec<DeviceInfo> {
 }
 
 /// Returns the first mouse-like device whose attributes match the given
-/// criteria. Stable across reboots as long as the USB device is plugged in,
-/// regardless of which `/dev/input/eventXX` number the kernel assigns.
-pub fn find_match(criteria: &MatchCriteria<'_>) -> Option<DeviceInfo> {
-    enumerate_mice().into_iter().find(|d| matches(d, criteria))
+/// criteria.
+///
+/// Stable across reboots as long as the USB device is plugged in, regardless
+/// of which `/dev/input/eventXX` number the kernel assigns.
+///
+/// Devices in `exclude` (already used for another configured mouse) are
+/// skipped, so two identical mice can each be matched once.
+pub fn find_match(criteria: &MatchCriteria<'_>, exclude: &[PathBuf]) -> Option<DeviceInfo> {
+    enumerate_mice()
+        .into_iter()
+        .find(|d| !exclude.contains(&d.path) && matches(d, criteria))
 }
 
 /// Opens a specific evdev node and returns its `DeviceInfo`. Returns `None`
@@ -135,6 +144,7 @@ fn collect_mouse_buttons(set: &evdev::AttributeSetRef<KeyCode>) -> Vec<KeyCode> 
         KeyCode::BTN_EXTRA,
         KeyCode::BTN_FORWARD,
         KeyCode::BTN_BACK,
+        KeyCode::BTN_TASK,
     ];
     INTERESTING
         .iter()

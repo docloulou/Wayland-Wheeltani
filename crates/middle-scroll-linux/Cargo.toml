@@ -8,15 +8,23 @@ repository.workspace = true
 description = "Installable Wayland-Wheeltani CLI daemon for Linux/Wayland (evdev + uinput)."
 readme = "../../README.md"
 
+# All the logic lives in the library so the two binaries below are thin
+# wrappers that only differ by the name they show in --help and logs.
+[lib]
+name = "wayland_wheeltani"
+path = "src/lib.rs"
+
 [[bin]]
 name = "wayland-wheeltani"
 path = "src/main.rs"
+doc = false
 
 # Short alias for the same daemon/CLI, installed alongside the full name by
-# `cargo install`/`cargo build` (see src/cli.rs for the dynamic --help name).
+# `cargo install`/`cargo build`.
 [[bin]]
 name = "wlw"
-path = "src/main.rs"
+path = "src/bin/wlw.rs"
+doc = false
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -39,15 +47,18 @@ similar_names = "allow"
 middle-scroll-core = { version = "1.3.3", path = "../middle-scroll-core" }
 evdev = { workspace = true }
 clap = { workspace = true }
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-ctrlc = { workspace = true }
-nix = { workspace = true, features = ["fs", "user"] }
+signal-hook = { workspace = true }
+nix = { workspace = true, features = ["fs", "user", "inotify", "socket"] }
 directories = { workspace = true }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]

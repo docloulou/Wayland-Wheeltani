@@ -1,8 +1,13 @@
-//! Sway / i3 provider: subscribes to `window` events and tracks the focused
-//! app from the container carried by each event, falling back to `GET_TREE`
-//! only when an event cannot identify the focused window (initial sync and
-//! window-close). This keeps the steady state at zero extra connections and
-//! zero tree parses per focus change.
+//! Sway / i3 provider: subscribes to `window` and `workspace` events and
+//! tracks the focused app from the container carried by each window event,
+//! falling back to `GET_TREE` only when an event cannot identify the focused
+//! window (initial sync, window close, workspace switch). This keeps the
+//! steady state at zero extra connections and zero tree parses per focus
+//! change.
+//!
+//! A workspace switch matters on its own: moving to an empty workspace
+//! focuses no window and sends no window event, so without it the previous
+//! window would stay "focused" in the snapshot.
 //!
 //! Socket discovery works even without `SWAYSOCK`/`I3SOCK`: those variables
 //! are set inside the compositor's children but are usually absent from a
@@ -28,6 +33,9 @@ use super::{read_snapshot, store, SharedSnapshot};
 const MAGIC: &[u8] = b"i3-ipc";
 const IPC_SUBSCRIBE: u32 = 2;
 const IPC_GET_TREE: u32 = 4;
+/// Event replies have the high bit set; the low bits name the event.
+const IPC_EVENT_WORKSPACE: u32 = 0x8000_0000;
+const IPC_EVENT_WINDOW: u32 = 0x8000_0003;
 
 /// Upper bound on an IPC payload we are willing to buffer. Real `GET_TREE`
 /// payloads are well under a few megabytes; anything larger indicates a
@@ -64,7 +72,9 @@ fn socket_path() -> Option<PathBuf> {
 /// most recently created one (the live compositor). Needed when the daemon
 /// runs as a `systemd --user` service, where `SWAYSOCK` is not exported.
 fn discover_sway_socket() -> Option<PathBuf> {
-    let runtime = std::env::var("XDG_RUNTIME_DIR").ok().filter(|s| !s.is_empty())?;
+    let runtime = std::env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())?;
     let entries = std::fs::read_dir(runtime).ok()?;
     let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
     for entry in entries.flatten() {
@@ -77,7 +87,7 @@ fn discover_sway_socket() -> Option<PathBuf> {
         }
         let Ok(meta) = entry.metadata() else { continue };
         let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
-        if best.as_ref().map_or(true, |(t, _)| modified > *t) {
+        if best.as_ref().is_none_or(|(t, _)| modified > *t) {
             best = Some((modified, entry.path()));
         }
     }
@@ -118,7 +128,9 @@ fn event_loop(shared: &SharedSnapshot) {
             store(
                 shared,
                 ForegroundSnapshot::Unsupported {
-                    reason: "SWAYSOCK/I3SOCK unset".to_owned(),
+                    reason: "no sway/i3 ipc socket found (SWAYSOCK/I3SOCK unset and none in \
+                             the runtime dir)"
+                        .to_owned(),
                 },
             );
             thread::sleep(BACKOFF_MAX);
@@ -137,7 +149,7 @@ fn event_loop(shared: &SharedSnapshot) {
 
 fn run_session(path: &Path, shared: &SharedSnapshot, backoff: &mut Duration) -> io::Result<()> {
     let mut sub = UnixStream::connect(path)?;
-    send_msg(&mut sub, IPC_SUBSCRIBE, br#"["window"]"#)?;
+    send_msg(&mut sub, IPC_SUBSCRIBE, br#"["window","workspace"]"#)?;
     let _ = read_msg(&mut sub)?; // subscribe acknowledgement
     *backoff = BACKOFF_START;
 
@@ -146,8 +158,13 @@ fn run_session(path: &Path, shared: &SharedSnapshot, backoff: &mut Duration) -> 
     // tell us who is focused now (e.g. the focused window closed).
     refresh(path, shared);
     loop {
-        let (_, payload) = read_msg(&mut sub)?;
-        match handle_window_event(&payload) {
+        let (msg_type, payload) = read_msg(&mut sub)?;
+        let outcome = match msg_type {
+            IPC_EVENT_WINDOW => handle_window_event(&payload),
+            IPC_EVENT_WORKSPACE => handle_workspace_event(&payload),
+            _ => EventOutcome::Ignore,
+        };
+        match outcome {
             EventOutcome::Update(app) => store(shared, ForegroundSnapshot::Known(app)),
             EventOutcome::NeedsTreeRefresh => refresh(path, shared),
             EventOutcome::Ignore => {}
@@ -191,6 +208,24 @@ fn handle_window_event(payload: &[u8]) -> EventOutcome {
         // (e.g. the workspace becomes empty).
         "close" => EventOutcome::NeedsTreeRefresh,
         _ => EventOutcome::Ignore,
+    }
+}
+
+/// Interprets a `workspace` event payload. Only a focus change can change
+/// the focused window, and the event does not say which window that is (the
+/// new workspace may be empty), so the tree is queried.
+fn handle_workspace_event(payload: &[u8]) -> EventOutcome {
+    let change = serde_json::from_slice::<Value>(payload)
+        .ok()
+        .and_then(|event| {
+            event
+                .get("change")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        });
+    match change.as_deref() {
+        Some("focus") | None => EventOutcome::NeedsTreeRefresh,
+        Some(_) => EventOutcome::Ignore,
     }
 }
 
@@ -248,10 +283,15 @@ fn read_msg(stream: &mut UnixStream) -> io::Result<(u32, Vec<u8>)> {
 
 /// Recursively finds the node with `focused == true` and maps it to a
 /// [`ForegroundApp`]. Searches both tiled (`nodes`) and `floating_nodes`.
+///
+/// Returns `None` when the focused node is not a window: on an empty
+/// workspace Sway focuses the workspace node itself, whose `name` is the
+/// workspace name, and reporting that as an app would match title rules
+/// against "1" or "web".
 #[must_use]
 pub fn find_focused(node: &Value) -> Option<ForegroundApp> {
     if node.get("focused").and_then(Value::as_bool) == Some(true) {
-        return Some(node_to_app(node));
+        return is_window(node).then(|| node_to_app(node));
     }
     for key in ["nodes", "floating_nodes"] {
         if let Some(children) = node.get(key).and_then(Value::as_array) {
@@ -263,6 +303,20 @@ pub fn find_focused(node: &Value) -> Option<ForegroundApp> {
         }
     }
     None
+}
+
+/// True for a window (a view), as opposed to the root, an output, a
+/// workspace or a split container focused with `focus parent`. Views carry an
+/// `app_id` (Wayland), X11 `window` properties, or a `pid`.
+fn is_window(node: &Value) -> bool {
+    if matches!(
+        node.get("type").and_then(Value::as_str),
+        Some("root" | "output" | "workspace" | "dockarea")
+    ) {
+        return false;
+    }
+    let present = |key: &str| node.get(key).is_some_and(|v| !v.is_null());
+    present("app_id") || present("window") || present("window_properties") || present("pid")
 }
 
 fn node_to_app(node: &Value) -> ForegroundApp {
@@ -394,6 +448,41 @@ mod tests {
         assert!(matches!(
             handle_window_event(b"{not json"),
             EventOutcome::NeedsTreeRefresh
+        ));
+    }
+
+    #[test]
+    fn focused_workspace_is_not_a_window() {
+        let tree = serde_json::json!({
+            "type": "root",
+            "focused": false,
+            "nodes": [{"type": "output", "focused": false, "nodes": [
+                {"type": "workspace", "name": "2", "focused": true, "nodes": []}
+            ]}]
+        });
+        assert!(find_focused(&tree).is_none());
+
+        let parent = serde_json::json!({
+            "type": "root",
+            "focused": false,
+            "nodes": [{"type": "con", "focused": true, "name": null, "nodes": [
+                {"type": "con", "focused": false, "app_id": "kitty", "pid": 1}
+            ]}]
+        });
+        assert!(find_focused(&parent).is_none());
+    }
+
+    #[test]
+    fn workspace_focus_forces_tree_refresh() {
+        let focus = serde_json::json!({"change": "focus", "current": {"name": "2"}});
+        assert!(matches!(
+            handle_workspace_event(focus.to_string().as_bytes()),
+            EventOutcome::NeedsTreeRefresh
+        ));
+        let rename = serde_json::json!({"change": "rename", "current": {"name": "web"}});
+        assert!(matches!(
+            handle_workspace_event(rename.to_string().as_bytes()),
+            EventOutcome::Ignore
         ));
     }
 

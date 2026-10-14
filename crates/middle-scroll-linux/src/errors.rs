@@ -89,6 +89,22 @@ pub enum DaemonError {
         source: nix::Error,
     },
 
+    #[error("failed to edit config {path}: {source}")]
+    ConfigEdit {
+        path: PathBuf,
+        #[source]
+        source: toml_edit::TomlError,
+    },
+
     #[error("invalid config: {0}")]
     ConfigInvalid(#[from] middle_scroll_core::ConfigError),
+
+    #[error("invalid profile \"{name}\": {reason}")]
+    ProfileInvalid { name: String, reason: String },
+
+    #[error(
+        "could not read the USB ids of {0}; --add-device needs a mouse that reports them \
+         (check `wayland-wheeltani --list-devices`)"
+    )]
+    DeviceProbe(PathBuf),
 }

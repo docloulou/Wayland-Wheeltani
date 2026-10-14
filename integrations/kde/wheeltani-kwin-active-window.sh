@@ -4,11 +4,12 @@
 # ===============================
 #
 # Example helper for Wayland-Wheeltani's `command` foreground provider on
-# KDE Plasma 6 (KWin / Wayland). It prints the *resource class* (WM class) of the
-# currently focused window on stdout, one line, e.g.:
+# KDE Plasma 6 (KWin / Wayland). It prints the currently focused window as one
+# line of JSON on stdout, the format the `command` provider reads, e.g.:
 #
-#   org.kde.dolphin      # native KDE app  (desktop id)
-#   firefox              # X / XWayland app (WM class)
+#   {"app_id":"org.kde.dolphin","class":"dolphin","resource_class":"dolphin","title":"Home — Dolphin","pid":4242}
+#
+# `{}` means no window has focus (the daemon then applies unknown_policy).
 #
 # Wire it into ~/.config/wayland-wheeltani/config.toml:
 #
@@ -30,8 +31,7 @@
 # KWin (Wayland) exposes no readable "active window" D-Bus API. The only reliable
 # route is its *scripting* API: we load a tiny KWin script through the
 # `org.kde.kwin.Scripting` D-Bus interface, run it (the script `print()`s the
-# class into the journal), then scrape that line back out. This is exactly the
-# technique `kdotool` uses internally.
+# window into the journal), then scrape that line back out.
 #
 # PREFER `provider = "kde"` + kdotool if you can install it (cleaner and the
 # tested path). This script is the "no extra binary" fallback and is provided as
@@ -56,15 +56,24 @@ if [ -z "$qdbus_bin" ]; then
   exit 1
 fi
 
-# 2) Write a one-shot KWin script. A unique marker makes the journal line easy to
-#    find regardless of KWin's own `js:` log prefix. An empty active window (e.g.
-#    focus on the desktop) prints an empty value -> the daemon treats it as
-#    "unknown" and applies unknown_policy.
-marker="WHEELTANI_FG"
+# 2) Write a one-shot KWin script. The marker is unique to this invocation, so
+#    a line printed by an earlier or overlapping run (the daemon polls this
+#    script, and the journal is shared) can never be taken for this one.
+marker="WHEELTANI_FG_$$_$(date +%s%N)"
 script_file="$(mktemp --suffix=.js)"
 trap 'rm -f "$script_file"' EXIT
-printf 'var w = workspace.activeWindow; print("%s:" + (w ? w.resourceClass : ""));\n' \
-  "$marker" > "$script_file"
+cat >"$script_file" <<JS
+var w = workspace.activeWindow;
+var info = {};
+if (w) {
+  if (w.desktopFileName) info.app_id = w.desktopFileName;
+  if (w.resourceClass) info.class = w.resourceClass;
+  if (w.resourceName) info.resource_class = w.resourceName;
+  if (w.caption) info.title = w.caption;
+  if (w.pid > 0) info.pid = w.pid;
+}
+print("${marker}:" + JSON.stringify(info));
+JS
 
 # 3) Load + run + unload the script through KWin's Scripting interface. A unique
 #    plugin name per invocation avoids clashing with a previous run.
@@ -73,23 +82,35 @@ since="$(date '+%Y-%m-%d %H:%M:%S')"
 
 script_id="$("$qdbus_bin" org.kde.KWin /Scripting org.kde.kwin.Scripting.loadScript \
   "$script_file" "$plugin" 2>/dev/null || true)"
-if [ -n "$script_id" ]; then
-  "$qdbus_bin" org.kde.KWin "/Scripting/Script${script_id}" org.kde.kwin.Script.run \
-    >/dev/null 2>&1 || true
-fi
+case "$script_id" in
+  '' | -*)
+    echo "wheeltani-kwin: KWin refused to load the script" >&2
+    exit 1
+    ;;
+esac
+"$qdbus_bin" org.kde.KWin "/Scripting/Script${script_id}" org.kde.kwin.Script.run \
+  >/dev/null 2>&1 || true
 "$qdbus_bin" org.kde.KWin /Scripting org.kde.kwin.Scripting.unloadScript "$plugin" \
   >/dev/null 2>&1 || true
 
-# 4) Give KWin a moment to flush the print, then scrape the most recent marker.
-#    KWin logs to the systemd *user* journal on a normal Plasma session; if your
-#    setup logs to the system journal instead, drop `--user` below.
-sleep 0.05
-line="$(journalctl --user --since "$since" -o cat 2>/dev/null \
-  | grep -o "${marker}:.*" | tail -n 1 || true)"
+# 4) Wait for KWin to flush the print, up to about one second, then take the
+#    line carrying this run's marker. KWin logs to the systemd *user* journal
+#    on a normal Plasma session; the system journal is tried as a fallback.
+scrape() {
+  journalctl "$@" --since "$since" -o cat 2>/dev/null |
+    grep -o "${marker}:.*" | tail -n 1 || true
+}
+line=""
+for _ in $(seq 20); do
+  line="$(scrape --user)"
+  [ -n "$line" ] || line="$(scrape)"
+  [ -n "$line" ] && break
+  sleep 0.05
+done
 if [ -z "$line" ]; then
-  line="$(journalctl --since "$since" -o cat 2>/dev/null \
-    | grep -o "${marker}:.*" | tail -n 1 || true)"
+  echo "wheeltani-kwin: no reply from the KWin script within 1s" >&2
+  exit 1
 fi
 
-# 5) Emit the class on stdout (empty line if none -> unknown_policy applies).
+# 5) Emit the JSON on stdout.
 printf '%s\n' "${line#"${marker}":}"
