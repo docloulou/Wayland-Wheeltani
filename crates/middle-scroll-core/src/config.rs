@@ -7,8 +7,30 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
 pub enum Mode {
+    /// Hold the trigger button and move: scrolling stops on release, and a
+    /// release inside the deadzone emits a normal click.
     #[default]
     HoldProgressive,
+    /// Like `HoldProgressive`, but a click inside the deadzone *latches*
+    /// scroll mode instead of emitting a click: the pointer then steers the
+    /// scroll speed until the next button press, which ends scroll mode and is
+    /// swallowed together with its release. Press-drag-release still behaves
+    /// like hold mode.
+    ToggleProgressive,
+}
+
+/// Restricts which axes may scroll at the same time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "snake_case"))]
+pub enum AxisLock {
+    /// Both axes scroll independently (diagonal scrolling).
+    #[default]
+    Off,
+    /// On every tick only the axis with the larger offset scrolls.
+    Dominant,
+    /// The first axis to leave the deadzone is used for the whole gesture.
+    First,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -50,6 +72,14 @@ pub struct CoreConfig {
 
     pub horizontal_scroll: bool,
     pub max_detents_per_tick: i32,
+
+    pub axis_lock: AxisLock,
+
+    /// Keep scrolling after the trigger is released, slowing down
+    /// exponentially (kinetic scrolling).
+    pub inertia: bool,
+    /// Time for the coasting speed to halve. Only used when `inertia` is set.
+    pub inertia_half_life_ms: u32,
 }
 
 impl Default for CoreConfig {
@@ -85,6 +115,11 @@ impl Default for CoreConfig {
 
             horizontal_scroll: true,
             max_detents_per_tick: 4,
+
+            axis_lock: AxisLock::Off,
+
+            inertia: false,
+            inertia_half_life_ms: 300,
         }
     }
 }
@@ -135,6 +170,8 @@ pub enum ConfigError {
         "scroll_speed_steps[{index}].speed_detents_per_second must be > 0 and finite, got {speed}"
     )]
     BadSpeedStepSpeed { index: usize, speed: f64 },
+    #[error("inertia_half_life_ms must be in 1..=10000, got {0}")]
+    BadInertiaHalfLife(u32),
 }
 
 impl CoreConfig {
@@ -183,6 +220,9 @@ impl CoreConfig {
         if !self.emit_hires_wheel && !self.emit_legacy_wheel {
             return Err(ConfigError::NoWheelEmitter);
         }
+        if !(1..=10_000).contains(&self.inertia_half_life_ms) {
+            return Err(ConfigError::BadInertiaHalfLife(self.inertia_half_life_ms));
+        }
         let mut previous_distance = None;
         for (index, step) in self.scroll_speed_steps.iter().enumerate() {
             if step.distance_units <= self.deadzone_units {
@@ -219,4 +259,3 @@ impl CoreConfig {
         Ok(())
     }
 }
-
