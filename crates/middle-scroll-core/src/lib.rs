@@ -15,7 +15,7 @@ pub mod config;
 pub mod engine;
 pub mod model;
 
-pub use config::{ConfigError, CoreConfig, Mode, SpeedStep};
+pub use config::{AxisLock, ConfigError, CoreConfig, Mode, SpeedStep};
 pub use engine::Engine;
 pub use model::{CoreAction, CoreInputEvent, EngineState, MouseButton};
 

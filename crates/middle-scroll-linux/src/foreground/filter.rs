@@ -2,10 +2,6 @@
 
 use std::fmt;
 
-use middle_scroll_core::{CoreInputEvent, EngineState};
-
-use crate::event_router::RoutedEvent;
-
 use super::config::{ForegroundConfig, UnknownPolicy};
 use super::matcher;
 
@@ -65,136 +61,203 @@ pub trait ForegroundProvider: Send {
     fn snapshot(&self) -> ForegroundSnapshot;
 }
 
-/// Whether the autoscroll engine should handle an event, or whether it must be
-/// passed straight through to the virtual device.
+/// Whether the autoscroll engine should handle a gesture, or whether its
+/// events must be passed straight through to the virtual device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutoscrollDecision {
     Enabled,
     Disabled,
 }
 
-/// Runtime decision layer sitting between `event_router::classify` and the
-/// autoscroll engine. It evaluates the active provider and latches a single
-/// decision for the duration of a middle-button gesture.
+/// The applications a `[[profiles]]` entry applies to.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ProfileRule {
+    pub apps: Vec<String>,
+    pub match_title: bool,
+}
+
+/// What the gate decided for one trigger gesture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GateDecision {
+    pub decision: AutoscrollDecision,
+    /// Index of the first profile whose `apps` match the focused application.
+    pub profile: Option<usize>,
+}
+
+impl GateDecision {
+    const DEFAULT: Self = Self {
+        decision: AutoscrollDecision::Enabled,
+        profile: None,
+    };
+}
+
+/// Decision layer between the event router and the autoscroll engine.
+///
+/// At the start of each trigger gesture it reads the focused application
+/// once, decides whether autoscroll is allowed there (`[foreground]`) and
+/// which profile applies (`[[profiles]]`), and latches that answer until the
+/// gesture ends so a focus change mid-gesture never changes the rules.
 pub struct ForegroundGate {
     cfg: ForegroundConfig,
-    provider: Box<dyn ForegroundProvider>,
-    latched_middle_decision: Option<AutoscrollDecision>,
+    rules: Vec<ProfileRule>,
+    /// Started lazily: only when the filter is enabled or profiles exist.
+    provider: Option<Box<dyn ForegroundProvider>>,
+    latched: Option<GateDecision>,
 }
 
 impl fmt::Debug for ForegroundGate {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ForegroundGate")
             .field("cfg", &self.cfg)
-            .field("latched_middle_decision", &self.latched_middle_decision)
-            .finish_non_exhaustive()
+            .field("rules", &self.rules)
+            .field("provider_started", &self.provider.is_some())
+            .field("latched", &self.latched)
+            .finish()
     }
 }
 
 impl ForegroundGate {
-    /// Builds a gate for `cfg`, selecting and starting the appropriate provider.
+    /// Builds a gate for `cfg` and the profile `rules`.
     ///
-    /// When the filter is disabled no provider is started at all: the gate
-    /// answers `Enabled` without ever consulting a snapshot, so spawning
-    /// provider threads (and their `gdbus`/`kdotool` subprocesses) would only
-    /// burn CPU and memory for nothing.
+    /// A provider is only started when something needs it: with the filter
+    /// disabled and no profiles the gate always answers `Enabled` without a
+    /// snapshot, so provider threads (and their `gdbus`/`kdotool`
+    /// subprocesses) would only cost CPU and memory.
     #[must_use]
-    pub fn new(cfg: ForegroundConfig) -> Self {
-        let provider: Box<dyn ForegroundProvider> = if cfg.enabled {
-            super::providers::select_provider(&cfg)
-        } else {
-            Box::new(super::providers::NoneProvider::new(
-                "foreground filter disabled",
-            ))
+    pub fn new(cfg: ForegroundConfig, rules: Vec<ProfileRule>) -> Self {
+        let mut gate = Self {
+            cfg,
+            rules,
+            provider: None,
+            latched: None,
         };
+        gate.start_provider_if_needed();
         tracing::debug!(
-            enabled = cfg.enabled,
-            provider = ?cfg.provider,
-            mode = ?cfg.mode,
+            enabled = gate.cfg.enabled,
+            profiles = gate.rules.len(),
+            provider = ?gate.cfg.provider,
+            mode = ?gate.cfg.mode,
             "foreground gate created"
         );
-        Self {
-            cfg,
-            provider,
-            latched_middle_decision: None,
-        }
+        gate
     }
 
     /// Builds a gate with an explicit provider. Used by tests.
     #[cfg(test)]
     #[must_use]
-    pub fn with_provider(cfg: ForegroundConfig, provider: Box<dyn ForegroundProvider>) -> Self {
+    pub fn with_provider(
+        cfg: ForegroundConfig,
+        rules: Vec<ProfileRule>,
+        provider: Box<dyn ForegroundProvider>,
+    ) -> Self {
         Self {
             cfg,
-            provider,
-            latched_middle_decision: None,
+            rules,
+            provider: Some(provider),
+            latched: None,
         }
     }
 
-    /// Clears any latched gesture decision. Called after a physical-device
-    /// reconnect so a gesture interrupted by an unplug cannot leave a stale
-    /// latch behind.
-    pub fn reset_latch(&mut self) {
-        self.latched_middle_decision = None;
+    fn needs_provider(&self) -> bool {
+        self.cfg.enabled || !self.rules.is_empty()
     }
 
-    /// Returns whether the engine should process `routed`, or whether it must be
-    /// passed through. The decision is taken once at the start of a middle
-    /// gesture and held until `MiddleUp`.
-    pub fn decision_for_event(
-        &mut self,
-        routed: &RoutedEvent,
-        engine_state: EngineState,
-    ) -> AutoscrollDecision {
-        // Filter disabled: behave exactly like the historical daemon.
-        if !self.cfg.enabled {
-            return AutoscrollDecision::Enabled;
-        }
-
-        // A gesture in flight keeps the decision taken at its `MiddleDown`.
-        if let Some(latched) = self.latched_middle_decision {
-            return latched;
-        }
-
-        // Start of a new middle gesture: evaluate once and latch.
-        if engine_state == EngineState::Idle
-            && matches!(routed, RoutedEvent::Core(CoreInputEvent::MiddleDown))
-        {
-            let decision = self.evaluate();
-            self.latched_middle_decision = Some(decision);
-            return decision;
-        }
-
-        // Outside a gesture the engine is already transparent for non-middle
-        // events (it only acts on the middle-button gesture), so we route them
-        // through the engine exactly as the unfiltered daemon does. This keeps
-        // behaviour byte-identical outside disabled gestures and avoids
-        // evaluating the provider on every motion event.
-        AutoscrollDecision::Enabled
-    }
-
-    /// Releases the gesture latch once the middle button is back up. Kept as a
-    /// separate hook so the decision stays stable while the button is held even
-    /// though, in the pass-through case, the engine never leaves `Idle`.
-    pub fn after_event(&mut self, routed: &RoutedEvent, _engine_state_after: EngineState) {
-        if matches!(routed, RoutedEvent::Core(CoreInputEvent::MiddleUp)) {
-            self.latched_middle_decision = None;
+    fn start_provider_if_needed(&mut self) {
+        if self.provider.is_none() && self.needs_provider() {
+            self.provider = Some(super::providers::select_provider(&self.cfg));
         }
     }
 
-    fn evaluate(&self) -> AutoscrollDecision {
-        let snapshot = self.provider.snapshot();
-        let decision = match &snapshot {
-            ForegroundSnapshot::Known(app) => matcher::decide(app, &self.cfg),
-            ForegroundSnapshot::Unknown { .. } | ForegroundSnapshot::Unsupported { .. } => {
-                match self.cfg.unknown_policy {
-                    UnknownPolicy::Enabled => AutoscrollDecision::Enabled,
-                    UnknownPolicy::Disabled => AutoscrollDecision::Disabled,
+    /// Applies a reloaded configuration. A gesture in flight keeps its
+    /// latched decision. The provider is started if it is now needed; a
+    /// different provider or helper command only takes effect after a
+    /// restart, because provider threads cannot be stopped cleanly.
+    pub fn set_config(&mut self, cfg: ForegroundConfig, rules: Vec<ProfileRule>) {
+        let provider_changed = self.cfg.provider != cfg.provider
+            || self.cfg.command != cfg.command
+            || self.cfg.command_refresh_ms != cfg.command_refresh_ms;
+        if self.provider.is_some() && provider_changed {
+            tracing::warn!(
+                old = ?self.cfg.provider,
+                new = ?cfg.provider,
+                "the foreground provider settings changed; restart the daemon to apply them"
+            );
+            // Keep describing the provider that is actually running.
+            let ForegroundConfig {
+                provider,
+                command,
+                command_refresh_ms,
+                ..
+            } = std::mem::take(&mut self.cfg);
+            self.cfg = ForegroundConfig {
+                provider,
+                command,
+                command_refresh_ms,
+                ..cfg
+            };
+        } else {
+            self.cfg = cfg;
+        }
+        self.rules = rules;
+        self.start_provider_if_needed();
+    }
+
+    /// The current snapshot of the focused application, if a provider runs.
+    pub fn snapshot(&self) -> Option<ForegroundSnapshot> {
+        self.provider.as_ref().map(|p| p.snapshot())
+    }
+
+    /// Decides for a new trigger gesture and latches the answer until
+    /// [`end_gesture`](Self::end_gesture).
+    pub fn begin_gesture(&mut self) -> GateDecision {
+        let decision = self.evaluate();
+        self.latched = Some(decision);
+        decision
+    }
+
+    /// The decision of the gesture in flight, if any.
+    pub const fn latched(&self) -> Option<GateDecision> {
+        self.latched
+    }
+
+    /// Releases the latch once the trigger is back up.
+    pub const fn end_gesture(&mut self) {
+        self.latched = None;
+    }
+
+    /// Clears any latched decision. Called after a device disconnect so a
+    /// gesture interrupted by an unplug cannot leave a stale latch behind.
+    pub const fn reset_latch(&mut self) {
+        self.latched = None;
+    }
+
+    fn evaluate(&self) -> GateDecision {
+        let Some(provider) = self.provider.as_ref().filter(|_| self.needs_provider()) else {
+            return GateDecision::DEFAULT;
+        };
+        let snapshot = provider.snapshot();
+        let decision = if self.cfg.enabled {
+            match &snapshot {
+                ForegroundSnapshot::Known(app) => matcher::decide(app, &self.cfg),
+                ForegroundSnapshot::Unknown { .. } | ForegroundSnapshot::Unsupported { .. } => {
+                    match self.cfg.unknown_policy {
+                        UnknownPolicy::Enabled => AutoscrollDecision::Enabled,
+                        UnknownPolicy::Disabled => AutoscrollDecision::Disabled,
+                    }
                 }
             }
+        } else {
+            AutoscrollDecision::Enabled
         };
-        tracing::debug!(snapshot = ?snapshot, decision = ?decision, "foreground decision");
-        decision
+        let profile = match &snapshot {
+            ForegroundSnapshot::Known(app) => self
+                .rules
+                .iter()
+                .position(|rule| matcher::app_matches(app, &rule.apps, rule.match_title)),
+            _ => None,
+        };
+        tracing::debug!(?snapshot, ?decision, ?profile, "foreground decision");
+        GateDecision { decision, profile }
     }
 }
 
@@ -202,13 +265,10 @@ impl ForegroundGate {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use middle_scroll_core::{CoreInputEvent, EngineState};
-
     use super::{
         AutoscrollDecision, ForegroundApp, ForegroundGate, ForegroundProvider, ForegroundSnapshot,
-        ForegroundSourceKind,
+        ForegroundSourceKind, GateDecision, ProfileRule,
     };
-    use crate::event_router::RoutedEvent;
     use crate::foreground::config::{ForegroundConfig, ForegroundMode, UnknownPolicy};
 
     /// Provider whose snapshot can be swapped at runtime, to model focus changes.
@@ -240,105 +300,73 @@ mod tests {
         }
     }
 
-    fn core(ev: CoreInputEvent) -> RoutedEvent {
-        RoutedEvent::Core(ev)
+    fn rule(apps: &[&str]) -> ProfileRule {
+        ProfileRule {
+            apps: apps.iter().map(|s| (*s).to_owned()).collect(),
+            match_title: false,
+        }
     }
 
-    fn gate(cfg: ForegroundConfig, snap: ForegroundSnapshot) -> ForegroundGate {
-        let shared = Arc::new(MutableProvider(Mutex::new(snap)));
-        ForegroundGate::with_provider(cfg, Box::new(shared))
+    fn shared(snap: ForegroundSnapshot) -> Arc<MutableProvider> {
+        Arc::new(MutableProvider(Mutex::new(snap)))
+    }
+
+    fn gate(
+        cfg: ForegroundConfig,
+        rules: Vec<ProfileRule>,
+        snap: ForegroundSnapshot,
+    ) -> ForegroundGate {
+        ForegroundGate::with_provider(cfg, rules, Box::new(shared(snap)))
+    }
+
+    fn decision(g: &mut ForegroundGate) -> AutoscrollDecision {
+        g.begin_gesture().decision
     }
 
     #[test]
-    fn disabled_config_is_always_enabled() {
-        let mut g = gate(ForegroundConfig::default(), known("firefox"));
-        assert_eq!(
-            g.decision_for_event(&core(CoreInputEvent::MiddleDown), EngineState::Idle),
-            AutoscrollDecision::Enabled
-        );
+    fn disabled_config_without_profiles_is_always_enabled() {
+        let mut g = gate(ForegroundConfig::default(), Vec::new(), known("firefox"));
+        assert_eq!(g.begin_gesture(), GateDecision::DEFAULT);
+    }
+
+    #[test]
+    fn disabled_config_without_profiles_starts_no_provider() {
+        let g = ForegroundGate::new(ForegroundConfig::default(), Vec::new());
+        assert!(g.snapshot().is_none());
     }
 
     #[test]
     fn denylist_match_latches_disabled() {
-        let mut g = gate(denylist_cfg(&["firefox"]), known("firefox"));
+        let mut g = gate(denylist_cfg(&["firefox"]), Vec::new(), known("firefox"));
+        assert_eq!(decision(&mut g), AutoscrollDecision::Disabled);
         assert_eq!(
-            g.decision_for_event(&core(CoreInputEvent::MiddleDown), EngineState::Idle),
-            AutoscrollDecision::Disabled
+            g.latched().map(|d| d.decision),
+            Some(AutoscrollDecision::Disabled)
         );
-        // In pass-through the engine stays Idle, but the latch must hold.
-        assert_eq!(
-            g.decision_for_event(
-                &core(CoreInputEvent::Motion { dx: 0, dy: 9 }),
-                EngineState::Idle
-            ),
-            AutoscrollDecision::Disabled
-        );
-    }
-
-    #[test]
-    fn non_gesture_events_stay_enabled_even_for_denied_app() {
-        // Outside a middle gesture the engine is transparent, so the gate must
-        // route events through it (Enabled) rather than evaluating per event.
-        let mut g = gate(denylist_cfg(&["firefox"]), known("firefox"));
-        assert_eq!(
-            g.decision_for_event(
-                &core(CoreInputEvent::Motion { dx: 1, dy: 1 }),
-                EngineState::Idle
-            ),
-            AutoscrollDecision::Enabled
-        );
-        assert_eq!(
-            g.decision_for_event(
-                &core(CoreInputEvent::Wheel {
-                    vertical: 1,
-                    horizontal: 0,
-                }),
-                EngineState::Idle
-            ),
-            AutoscrollDecision::Enabled
-        );
+        g.end_gesture();
+        assert_eq!(g.latched(), None);
     }
 
     #[test]
     fn focus_change_during_gesture_keeps_decision() {
-        let shared = Arc::new(MutableProvider(Mutex::new(known("code"))));
-        let mut g =
-            ForegroundGate::with_provider(denylist_cfg(&["firefox"]), Box::new(shared.clone()));
-
-        // Gesture starts in an allowed app.
-        assert_eq!(
-            g.decision_for_event(&core(CoreInputEvent::MiddleDown), EngineState::Idle),
-            AutoscrollDecision::Enabled
+        let provider = shared(known("code"));
+        let mut g = ForegroundGate::with_provider(
+            denylist_cfg(&["firefox"]),
+            Vec::new(),
+            Box::new(provider.clone()),
         );
-        // Focus moves to a denied app mid-gesture.
-        *shared.0.lock().unwrap() = known("firefox");
-        assert_eq!(
-            g.decision_for_event(
-                &core(CoreInputEvent::Motion { dx: 0, dy: 9 }),
-                EngineState::MiddlePending
-            ),
-            AutoscrollDecision::Enabled
-        );
-    }
 
-    #[test]
-    fn middleup_releases_latch_for_next_gesture() {
-        let shared = Arc::new(MutableProvider(Mutex::new(known("code"))));
-        let mut g =
-            ForegroundGate::with_provider(denylist_cfg(&["firefox"]), Box::new(shared.clone()));
-
+        assert_eq!(decision(&mut g), AutoscrollDecision::Enabled);
+        // Focus moves to a denied app mid-gesture: the latch holds.
+        *provider.0.lock().unwrap() = known("firefox");
         assert_eq!(
-            g.decision_for_event(&core(CoreInputEvent::MiddleDown), EngineState::Idle),
-            AutoscrollDecision::Enabled
+            g.latched().map(|d| d.decision),
+            Some(AutoscrollDecision::Enabled)
         );
-        g.after_event(&core(CoreInputEvent::MiddleUp), EngineState::Idle);
 
-        // A new gesture re-evaluates the (now denied) app.
-        *shared.0.lock().unwrap() = known("firefox");
-        assert_eq!(
-            g.decision_for_event(&core(CoreInputEvent::MiddleDown), EngineState::Idle),
-            AutoscrollDecision::Disabled
-        );
+        // The next gesture re-evaluates the (now denied) app.
+        g.end_gesture();
+        assert_eq!(decision(&mut g), AutoscrollDecision::Disabled);
     }
 
     #[test]
@@ -350,14 +378,12 @@ mod tests {
         };
         let mut g = gate(
             cfg,
+            Vec::new(),
             ForegroundSnapshot::Unknown {
                 reason: "no provider".to_owned(),
             },
         );
-        assert_eq!(
-            g.decision_for_event(&core(CoreInputEvent::MiddleDown), EngineState::Idle),
-            AutoscrollDecision::Enabled
-        );
+        assert_eq!(decision(&mut g), AutoscrollDecision::Enabled);
     }
 
     #[test]
@@ -369,13 +395,97 @@ mod tests {
         };
         let mut g = gate(
             cfg,
+            Vec::new(),
             ForegroundSnapshot::Unsupported {
                 reason: "no provider".to_owned(),
             },
         );
+        assert_eq!(decision(&mut g), AutoscrollDecision::Disabled);
+    }
+
+    #[test]
+    fn first_matching_profile_wins() {
+        let rules = vec![
+            rule(&["code"]),
+            rule(&["Firefox", "chromium"]),
+            rule(&["firefox"]),
+        ];
+        let mut g = gate(ForegroundConfig::default(), rules, known("firefox"));
         assert_eq!(
-            g.decision_for_event(&core(CoreInputEvent::MiddleDown), EngineState::Idle),
-            AutoscrollDecision::Disabled
+            g.begin_gesture(),
+            GateDecision {
+                decision: AutoscrollDecision::Enabled,
+                profile: Some(1),
+            }
+        );
+    }
+
+    #[test]
+    fn no_profile_for_unknown_or_unmatched_apps() {
+        let rules = vec![rule(&["code"])];
+        let mut g = gate(ForegroundConfig::default(), rules.clone(), known("firefox"));
+        assert_eq!(g.begin_gesture().profile, None);
+
+        let mut g = gate(
+            ForegroundConfig::default(),
+            rules,
+            ForegroundSnapshot::Unknown {
+                reason: "starting".to_owned(),
+            },
+        );
+        assert_eq!(g.begin_gesture().profile, None);
+    }
+
+    #[test]
+    fn profile_title_matching_is_per_rule() {
+        let app = ForegroundSnapshot::Known(ForegroundApp {
+            class: Some("kitty".to_owned()),
+            title: Some("nvim".to_owned()),
+            ..ForegroundApp::default()
+        });
+        let mut by_title = rule(&["nvim"]);
+        by_title.match_title = true;
+        let mut g = gate(
+            ForegroundConfig::default(),
+            vec![rule(&["nvim"]), by_title],
+            app,
+        );
+        assert_eq!(g.begin_gesture().profile, Some(1));
+    }
+
+    #[test]
+    fn denied_app_still_reports_its_profile() {
+        let mut g = gate(
+            denylist_cfg(&["firefox"]),
+            vec![rule(&["firefox"])],
+            known("firefox"),
+        );
+        assert_eq!(
+            g.begin_gesture(),
+            GateDecision {
+                decision: AutoscrollDecision::Disabled,
+                profile: Some(0),
+            }
+        );
+    }
+
+    #[test]
+    fn set_config_keeps_the_running_provider_settings() {
+        let mut g = gate(denylist_cfg(&["firefox"]), Vec::new(), known("firefox"));
+        let mut next = denylist_cfg(&["code"]);
+        next.provider = crate::foreground::config::ForegroundProviderKind::Sway;
+        g.set_config(next, vec![rule(&["firefox"])]);
+        assert_eq!(
+            g.cfg.provider,
+            crate::foreground::config::ForegroundProviderKind::Auto
+        );
+        assert_eq!(g.cfg.deny_apps, vec!["code".to_owned()]);
+        assert_eq!(
+            g.begin_gesture(),
+            GateDecision {
+                decision: AutoscrollDecision::Enabled,
+                profile: Some(0),
+            }
         );
     }
 }

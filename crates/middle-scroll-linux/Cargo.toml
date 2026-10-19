@@ -8,15 +8,23 @@ repository.workspace = true
 description = "Installable Wayland-Wheeltani CLI daemon for Linux/Wayland (evdev + uinput)."
 readme = "../../README.md"
 
+# All the logic lives in the library so the two binaries below are thin
+# wrappers that only differ by the name they show in --help and logs.
+[lib]
+name = "wayland_wheeltani"
+path = "src/lib.rs"
+
 [[bin]]
 name = "wayland-wheeltani"
 path = "src/main.rs"
+doc = false
 
 # Short alias for the same daemon/CLI, installed alongside the full name by
-# `cargo install`/`cargo build` (see src/cli.rs for the dynamic --help name).
+# `cargo install`/`cargo build`.
 [[bin]]
 name = "wlw"
-path = "src/main.rs"
+path = "src/bin/wlw.rs"
+doc = false
 
 [lints.rust]
 unsafe_code = "forbid"
@@ -36,19 +44,89 @@ cast_possible_wrap = "allow"
 similar_names = "allow"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-middle-scroll-core = { version = "1.3.3", path = "../middle-scroll-core" }
+middle-scroll-core = { version = "1.4.0", path = "../middle-scroll-core" }
 evdev = { workspace = true }
 clap = { workspace = true }
+clap_complete = { workspace = true }
+clap_mangen = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
+toml_edit = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-ctrlc = { workspace = true }
-nix = { workspace = true, features = ["fs", "user"] }
+signal-hook = { workspace = true }
+nix = { workspace = true, features = ["fs", "user", "inotify", "socket"] }
 directories = { workspace = true }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
 anyhow = { workspace = true }
+
+# Distribution packages. Build the binaries and the man pages/completions
+# first, then package without rebuilding:
+#
+#     cargo build --release --locked -p wayland-wheeltani
+#     scripts/generate-assets.sh
+#     cargo deb -p wayland-wheeltani --no-build
+#     cargo generate-rpm -p crates/middle-scroll-linux
+#
+# Paths are relative to this crate; `target/release/` is the workspace target.
+[package.metadata.deb]
+maintainer = "docloulou <lucas.zerbib@gmail.com>"
+section = "utils"
+priority = "optional"
+depends = "$auto"
+extended-description = """\
+Hold the middle mouse button and move the pointer to scroll smoothly, faster \
+the further you move, in every Wayland compositor. Reads the mouse through \
+evdev and scrolls through a uinput virtual mouse. An optional foreground \
+filter and per-app profiles work on Hyprland, Sway, GNOME and KDE Plasma."""
+license-file = ["../../LICENSE", "0"]
+assets = [
+    ["target/release/wayland-wheeltani", "usr/bin/", "755"],
+    ["target/release/wlw", "usr/bin/", "755"],
+    ["../../target/assets/man/wayland-wheeltani.1", "usr/share/man/man1/", "644"],
+    ["../../target/assets/man/wlw.1", "usr/share/man/man1/", "644"],
+    ["../../target/assets/completions/wayland-wheeltani.bash", "usr/share/bash-completion/completions/wayland-wheeltani", "644"],
+    ["../../target/assets/completions/wlw.bash", "usr/share/bash-completion/completions/wlw", "644"],
+    ["../../target/assets/completions/_wayland-wheeltani", "usr/share/zsh/vendor-completions/", "644"],
+    ["../../target/assets/completions/_wlw", "usr/share/zsh/vendor-completions/", "644"],
+    ["../../target/assets/completions/wayland-wheeltani.fish", "usr/share/fish/vendor_completions.d/", "644"],
+    ["../../target/assets/completions/wlw.fish", "usr/share/fish/vendor_completions.d/", "644"],
+    ["../../packaging/systemd/wayland-wheeltani.service", "usr/lib/systemd/user/", "644"],
+    ["../../README.md", "usr/share/doc/wayland-wheeltani/", "644"],
+    ["../../examples/config.toml", "usr/share/doc/wayland-wheeltani/examples/", "644"],
+    ["../../contrib/*", "usr/share/wayland-wheeltani/contrib/", "644"],
+    ["../../integrations/gnome/README.md", "usr/share/wayland-wheeltani/integrations/gnome/", "644"],
+    ["../../integrations/gnome/install.sh", "usr/share/wayland-wheeltani/integrations/gnome/", "755"],
+    ["../../integrations/gnome/wheeltani-foreground@docloulou.github.io/*", "usr/share/wayland-wheeltani/integrations/gnome/wheeltani-foreground@docloulou.github.io/", "644"],
+    ["../../integrations/kde/README.md", "usr/share/wayland-wheeltani/integrations/kde/", "644"],
+    ["../../integrations/kde/wheeltani-kwin-active-window.sh", "usr/share/wayland-wheeltani/integrations/kde/", "755"],
+]
+
+[package.metadata.generate-rpm]
+summary = "Progressive middle-button autoscroll daemon for Wayland"
+assets = [
+    { source = "target/release/wayland-wheeltani", dest = "/usr/bin/wayland-wheeltani", mode = "755" },
+    { source = "target/release/wlw", dest = "/usr/bin/wlw", mode = "755" },
+    { source = "../../target/assets/man/wayland-wheeltani.1", dest = "/usr/share/man/man1/wayland-wheeltani.1", mode = "644", doc = true },
+    { source = "../../target/assets/man/wlw.1", dest = "/usr/share/man/man1/wlw.1", mode = "644", doc = true },
+    { source = "../../target/assets/completions/wayland-wheeltani.bash", dest = "/usr/share/bash-completion/completions/wayland-wheeltani", mode = "644" },
+    { source = "../../target/assets/completions/wlw.bash", dest = "/usr/share/bash-completion/completions/wlw", mode = "644" },
+    { source = "../../target/assets/completions/_wayland-wheeltani", dest = "/usr/share/zsh/site-functions/_wayland-wheeltani", mode = "644" },
+    { source = "../../target/assets/completions/_wlw", dest = "/usr/share/zsh/site-functions/_wlw", mode = "644" },
+    { source = "../../target/assets/completions/wayland-wheeltani.fish", dest = "/usr/share/fish/vendor_completions.d/wayland-wheeltani.fish", mode = "644" },
+    { source = "../../target/assets/completions/wlw.fish", dest = "/usr/share/fish/vendor_completions.d/wlw.fish", mode = "644" },
+    { source = "../../packaging/systemd/wayland-wheeltani.service", dest = "/usr/lib/systemd/user/wayland-wheeltani.service", mode = "644" },
+    { source = "../../LICENSE", dest = "/usr/share/licenses/wayland-wheeltani/LICENSE", mode = "644", doc = true },
+    { source = "../../README.md", dest = "/usr/share/doc/wayland-wheeltani/README.md", mode = "644", doc = true },
+    { source = "../../examples/config.toml", dest = "/usr/share/doc/wayland-wheeltani/examples/config.toml", mode = "644", doc = true },
+    { source = "../../contrib/*", dest = "/usr/share/wayland-wheeltani/contrib/", mode = "644" },
+    { source = "../../integrations/gnome/README.md", dest = "/usr/share/wayland-wheeltani/integrations/gnome/README.md", mode = "644" },
+    { source = "../../integrations/gnome/install.sh", dest = "/usr/share/wayland-wheeltani/integrations/gnome/install.sh", mode = "755" },
+    { source = "../../integrations/gnome/wheeltani-foreground@docloulou.github.io/*", dest = "/usr/share/wayland-wheeltani/integrations/gnome/wheeltani-foreground@docloulou.github.io/", mode = "644" },
+    { source = "../../integrations/kde/README.md", dest = "/usr/share/wayland-wheeltani/integrations/kde/README.md", mode = "644" },
+    { source = "../../integrations/kde/wheeltani-kwin-active-window.sh", dest = "/usr/share/wayland-wheeltani/integrations/kde/wheeltani-kwin-active-window.sh", mode = "755" },
+]

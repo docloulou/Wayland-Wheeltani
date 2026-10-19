@@ -1,3 +1,8 @@
+# Example system-wide unit, for setups where the daemon must run as root.
+# The systemd --user unit (wayland-wheeltani.service) with the udev rule is
+# the recommended setup: a root daemon runs outside the user's session (no
+# session bus, no $XDG_RUNTIME_DIR), so `provider = "auto"` usually finds no
+# compositor and the foreground filter and profiles need `provider = "command"`.
 [Unit]
 Description=Progressive middle-button autoscroll daemon for Wayland (root service)
 Documentation=https://github.com/docloulou/Wayland-Wheeltani
@@ -6,17 +11,20 @@ After=multi-user.target
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/wayland-wheeltani --no-interactive --config /etc/wayland-wheeltani/config.toml
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=2
+# Control socket: /run/wayland-wheeltani/control.sock (root only).
+RuntimeDirectory=wayland-wheeltani
+RuntimeDirectoryMode=0700
 
 # The daemon needs the real /dev/input and /dev/uinput nodes, so do NOT enable
 # PrivateDevices=true here.
-# kdotool scripts must be shared with KWin and writable under ProtectSystem=strict.
 PrivateTmp=false
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/tmp
+ReadWritePaths=/etc/wayland-wheeltani /tmp
 RestrictSUIDSGID=true
 LockPersonality=true
 MemoryDenyWriteExecute=true

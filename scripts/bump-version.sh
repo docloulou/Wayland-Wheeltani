@@ -11,6 +11,8 @@ provided. The script updates:
   - Cargo.toml [workspace.package].version
   - crates/middle-scroll-linux/Cargo.toml middle-scroll-core dependency version
   - Cargo.lock through cargo check -p wayland-wheeltani
+  - packaging/arch/PKGBUILD pkgver (stable versions only: Arch versions
+    cannot hold the `-beta.N` suffix)
 
 Options:
   patch, --patch       Increment X.Y.Z to X.Y.(Z+1)
@@ -39,6 +41,7 @@ fail() {
 root_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 workspace_toml="$root_dir/Cargo.toml"
 linux_toml="$root_dir/crates/middle-scroll-linux/Cargo.toml"
+pkgbuild="$root_dir/packaging/arch/PKGBUILD"
 
 requested_bump=""
 manual_version=""
@@ -163,12 +166,12 @@ increment_prerelease() {
       "${BASH_REMATCH[2]}" \
       "${BASH_REMATCH[3]}" \
       "${BASH_REMATCH[4]}" \
-      "$(( ${BASH_REMATCH[5]} + 1 ))"
+      "$(( BASH_REMATCH[5] + 1 ))"
     return 0
   fi
 
   if [[ "$current" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
-    printf '%s.%s.0-beta.1\n' "${BASH_REMATCH[1]}" "$(( ${BASH_REMATCH[2]} + 1 ))"
+    printf '%s.%s.0-beta.1\n' "${BASH_REMATCH[1]}" "$(( BASH_REMATCH[2] + 1 ))"
     return 0
   fi
 
@@ -348,6 +351,15 @@ replace_core_dependency_version() {
   mv "$tmp" "$linux_toml"
 }
 
+# The PKGBUILD tracks stable releases only; a new pkgver restarts pkgrel at 1.
+replace_pkgbuild_version() {
+  local new_version="$1"
+
+  [[ "$new_version" != *-* ]] || return 0
+  sed -i -e "s/^pkgver=.*/pkgver=${new_version}/" -e 's/^pkgrel=.*/pkgrel=1/' "$pkgbuild"
+  grep -qx "pkgver=${new_version}" "$pkgbuild" || fail 'could not replace pkgver in packaging/arch/PKGBUILD'
+}
+
 current_version="$(read_workspace_version)" || fail 'could not read [workspace.package].version'
 validate_version "$current_version" || fail "current version is not supported: $current_version"
 
@@ -381,6 +393,7 @@ if [[ "$dry_run" == true ]]; then
 Dry run only. Would update:
   - Cargo.toml [workspace.package].version
   - crates/middle-scroll-linux/Cargo.toml middle-scroll-core dependency version
+  - packaging/arch/PKGBUILD pkgver, for a stable version
 DRYRUN
   if [[ "$run_check" == true ]]; then
     printf '  - Cargo.lock via cargo check -p wayland-wheeltani\n'
@@ -392,6 +405,7 @@ fi
 
 replace_workspace_version "$new_version"
 replace_core_dependency_version "$new_version"
+replace_pkgbuild_version "$new_version"
 
 if [[ "$run_check" == true ]]; then
   (
@@ -408,5 +422,6 @@ Version bumped to $new_version.
 Updated files:
   - Cargo.toml
   - crates/middle-scroll-linux/Cargo.toml
+  - packaging/arch/PKGBUILD, for a stable version (run updpkgsums after tagging)
   - Cargo.lock, if Cargo needed to refresh it
 DONE

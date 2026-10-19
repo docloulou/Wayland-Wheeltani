@@ -9,7 +9,7 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ inputs.version }}
@@ -18,11 +18,69 @@ concurrency:
 env:
   BIN_NAME: wayland-wheeltani
   PACKAGE: wayland-wheeltani
+  CARGO_TERM_COLOR: always
+  # The input only ever reaches scripts through this variable, never through
+  # `${{ }}` inside a script, so it cannot inject shell code.
+  VERSION: ${{ inputs.version }}
+  # A fixed Zig keeps release builds reproducible (cargo-zigbuild links with it).
+  ZIG_VERSION: "0.13.0"
 
 jobs:
+  verify:
+    name: Verify version, run tests, generate docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version input
+        run: |
+          set -euo pipefail
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Version must look like v0.1.0, v1.2.3-beta.1, etc." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check the tag matches Cargo.toml
+        run: |
+          set -euo pipefail
+          crate_version="$(cargo metadata --no-deps --format-version 1 --locked |
+            jq -r '.packages[] | select(.name == env.PACKAGE) | .version')"
+          if [[ "v${crate_version}" != "$VERSION" ]]; then
+            echo "$PACKAGE is version ${crate_version} in Cargo.toml but the release is ${VERSION}." >&2
+            echo "Run scripts/bump-version.sh first." >&2
+            exit 1
+          fi
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+      # The cross-compiled aarch64 binary cannot run here, and the man pages
+      # and completions do not depend on the architecture: generate them once
+      # from a host build and ship them in every archive.
+      - name: Generate man pages and completions
+        run: |
+          set -euo pipefail
+          cargo build --locked -p "$PACKAGE"
+          scripts/generate-assets.sh target/debug dist/assets
+
+      - name: Upload man pages and completions
+        uses: actions/upload-artifact@v4
+        with:
+          name: assets
+          path: dist/assets
+          if-no-files-found: error
+
   build:
     name: Build ${{ matrix.label }}
     runs-on: ubuntu-latest
+    needs: verify
     strategy:
       fail-fast: false
       matrix:
@@ -31,18 +89,11 @@ jobs:
             label: linux-x86_64-gnu
           - target: aarch64-unknown-linux-gnu
             label: linux-aarch64-gnu
+    env:
+      TARGET: ${{ matrix.target }}
+      LABEL: ${{ matrix.label }}
 
     steps:
-      - name: Validate version input
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${{ inputs.version }}"
-          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Version must look like v0.1.0, v1.2.3-beta.1, etc." >&2
-            exit 1
-          fi
-
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -54,42 +105,40 @@ jobs:
       - name: Install Zig
         uses: mlugg/setup-zig@v2
         with:
-          version: latest
+          version: ${{ env.ZIG_VERSION }}
 
-      - name: Cache cargo registry and target
-        uses: actions/cache@v4
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ matrix.target }}-cargo-
+          key: ${{ matrix.target }}
 
       - name: Install cargo-zigbuild
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-zigbuild
 
-      - name: Build release binary
-        run: cargo zigbuild --release -p "$PACKAGE" --target "${{ matrix.target }}"
+      - name: Build release binaries
+        run: cargo zigbuild --release --locked -p "$PACKAGE" --target "$TARGET"
 
-      - name: Package binary
-        shell: bash
+      - name: Download man pages and completions
+        uses: actions/download-artifact@v4
+        with:
+          name: assets
+          path: dist/assets
+
+      - name: Package binaries
         run: |
           set -euo pipefail
-          version="${{ inputs.version }}"
-          archive="${BIN_NAME}-${version}-${{ matrix.label }}.tar.gz"
-          staging="dist/${BIN_NAME}-${version}-${{ matrix.label }}"
+          name="${BIN_NAME}-${VERSION}-${LABEL}"
+          staging="dist/${name}"
 
           mkdir -p "$staging"
-          cp "target/${{ matrix.target }}/release/${BIN_NAME}" "$staging/${BIN_NAME}"
-          cp "target/${{ matrix.target }}/release/wlw" "$staging/wlw"
-          cp README.md LICENSE "$staging/"
-          cp -R contrib "$staging/"
-          tar -C dist -czf "dist/${archive}" "${BIN_NAME}-${version}-${{ matrix.label }}"
-          sha256sum "dist/${archive}" > "dist/${archive}.sha256"
+          cp "target/${TARGET}/release/${BIN_NAME}" "target/${TARGET}/release/wlw" "$staging/"
+          cp README.md LICENSE CHANGELOG.md "$staging/"
+          cp -R contrib integrations examples "$staging/"
+          cp -R dist/assets/man dist/assets/completions "$staging/"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          (cd dist && sha256sum "${name}.tar.gz" >"${name}.tar.gz.sha256")
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -104,6 +153,8 @@ jobs:
     name: Create GitHub release
     runs-on: ubuntu-latest
     needs: build
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -113,35 +164,32 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: linux-*
           merge-multiple: true
-
-      - name: Validate version input
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${{ inputs.version }}"
-          if [[ ! "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Version must look like v0.1.0, v1.2.3-beta.1, etc." >&2
-            exit 1
-          fi
 
       - name: Create release and upload assets
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
         run: |
           set -euo pipefail
-          version="${{ inputs.version }}"
-
-          if gh release view "$version" >/dev/null 2>&1; then
-            echo "Release $version already exists; uploading/replacing assets."
-            gh release upload "$version" dist/* --clobber
-          else
-            gh release create "$version" dist/* \
-              --title "Wayland-Wheeltani ${version}" \
-              --target "${{ github.sha }}" \
-              --notes "Linux release binaries for Wayland-Wheeltani ${version}."
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; uploading/replacing assets."
+            gh release upload "$VERSION" dist/* --clobber
+            exit 0
           fi
+
+          args=(--title "Wayland-Wheeltani ${VERSION}" --target "$GITHUB_SHA")
+          notes="release_notes/RELEASE_NOTES_${VERSION}.md"
+          if [[ -f "$notes" ]]; then
+            args+=(--notes-file "$notes")
+          else
+            args+=(--notes "Linux release binaries for Wayland-Wheeltani ${VERSION}.")
+          fi
+          # A -beta.N version is a semver pre-release.
+          if [[ "$VERSION" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$VERSION" dist/* "${args[@]}"
 
   publish-crates:
     name: Publish crates.io packages
