@@ -77,7 +77,7 @@ anyhow = { workspace = true }
 maintainer = "docloulou <lucas.zerbib@gmail.com>"
 section = "utils"
 priority = "optional"
-depends = "$auto"
+depends = "libc6, libgcc-s1"
 extended-description = """\
 Hold the middle mouse button and move the pointer to scroll smoothly, faster \
 the further you move, in every Wayland compositor. Reads the mouse through \

@@ -112,10 +112,10 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install cargo-zigbuild
+      - name: Install cargo-zigbuild, cargo-deb, and cargo-generate-rpm
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-zigbuild
+          tool: cargo-zigbuild,cargo-deb,cargo-generate-rpm
 
       - name: Build release binaries
         run: cargo zigbuild --release --locked -p "$PACKAGE" --target "$TARGET"
@@ -124,7 +124,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: assets
-          path: dist/assets
+          path: target/assets
 
       - name: Package binaries
         run: |
@@ -132,13 +132,23 @@ jobs:
           name="${BIN_NAME}-${VERSION}-${LABEL}"
           staging="dist/${name}"
 
-          mkdir -p "$staging"
+          mkdir -p "$staging" target/release
           cp "target/${TARGET}/release/${BIN_NAME}" "target/${TARGET}/release/wlw" "$staging/"
+          cp "target/${TARGET}/release/${BIN_NAME}" "target/${TARGET}/release/wlw" target/release/
           cp README.md LICENSE CHANGELOG.md "$staging/"
           cp -R contrib integrations examples "$staging/"
-          cp -R dist/assets/man dist/assets/completions "$staging/"
+          cp -R target/assets/man target/assets/completions "$staging/"
           tar -C dist -czf "dist/${name}.tar.gz" "${name}"
-          (cd dist && sha256sum "${name}.tar.gz" >"${name}.tar.gz.sha256")
+
+          cargo deb -p "$PACKAGE" --no-build --no-strip --target "$TARGET" -o dist/
+          cargo generate-rpm -p crates/middle-scroll-linux --target "$TARGET" -o dist/
+
+          (
+            cd dist
+            for pkg in *.tar.gz *.deb *.rpm; do
+              sha256sum "$pkg" >"${pkg}.sha256"
+            done
+          )
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -146,6 +156,8 @@ jobs:
           name: ${{ matrix.label }}
           path: |
             dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
             dist/*.sha256
           if-no-files-found: error
 
