@@ -44,7 +44,7 @@ cast_possible_wrap = "allow"
 similar_names = "allow"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-middle-scroll-core = { version = "1.3.3", path = "../middle-scroll-core" }
+middle-scroll-core = { version = "1.4.0", path = "../middle-scroll-core" }
 evdev = { workspace = true }
 clap = { workspace = true }
 clap_complete = { workspace = true }

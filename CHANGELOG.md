@@ -9,6 +9,8 @@ Pre-releases (`-beta.N`) are published as semver pre-releases, so a plain
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-19
+
 ### Added
 
 - **Control a running daemon**: `--status`, `--pause`, `--resume`, `--toggle`
@@ -447,6 +449,7 @@ live unplug/replug — no more editing `/dev/input/eventXX` paths.
 
 - README troubleshooting and installation steps clarified (udev rule setup).
 
+[1.4.0]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.4.0
 [1.3.3]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.3
 [1.3.2]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.2
 [1.3.1]: https://github.com/docloulou/Wayland-Wheeltani/releases/tag/v1.3.1
